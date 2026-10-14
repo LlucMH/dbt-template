@@ -1,0 +1,4 @@
+# BigQuery is the production warehouse: its dependencies live in the root
+# requirements.txt. This file only lets Cloud Build install
+# requirements/<adapter>.txt the same way for every warehouse.
+-r ../requirements.txt

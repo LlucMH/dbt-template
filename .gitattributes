@@ -1,0 +1,3 @@
+# Normalize line endings: LF in the repository on every OS (the CI runs on Linux).
+* text=auto eol=lf
+*.csv text eol=lf

@@ -1,0 +1,121 @@
+# =============================================================================
+# Silver models of business_entity_2
+#
+# Template conventions:
+#   - One models file per business entity.
+#   - Model name: <tb|vw|ep>_slv_l<n>_<business_entity>__<type>_<table>
+#     with type fact_ | dim_ | scd_ | bridge_ | agg_
+#     (naming validated by macros/validate_model_naming.sql).
+#   - l0 reads from the bronze layer (or from seeds and snapshots);
+#     l<n> only reads from lower levels of silver.
+#   - Business logic lives here, visible in SQL, never hidden in macros.
+#   - Every exposed column is documented. Primary key: unique + not_null.
+#   - Every model exposes _dbt_run_at (dbt_run_at() macro in the SQL).
+#   - Materialization is explicit in each model's config(); schema, tags,
+#     labels and color are inherited from dbt_project.yml.
+# =============================================================================
+version: 2
+
+models:
+  # l0 · fact unioned from several sources (composite key)
+  - name: vw_slv_l0_business_entity_2__fact_table_3
+    description: ...
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - source_database
+              - table_3_id
+              - event_date
+    columns:
+      - name: source_database
+        description: Source database the record comes from.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["source_database_1", "source_database_2"]
+      - name: table_3_id
+        description: ...
+        data_tests:
+          - not_null
+      - name: event_date
+        description: ...
+        data_tests:
+          - not_null
+      - name: amount
+        description: ... NULL if the source value was not numeric.
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l1 · incremental fact (rewrites whole days, see macros/config_by_date.sql)
+  - name: tb_slv_l1_business_entity_2__fact_table_3_partitioned
+    description: >
+      table_3 fact unioned from every source, in an incremental table organized
+      by date (partition, clustering, sort key or index depending on the
+      warehouse; see macros/config_by_date.sql). Every run rewrites the last
+      days (var business_entity_2_reprocess_days).
+    data_tests:
+      # Tests on a large table only look at recent days: the history was already
+      # validated when it was loaded, and reading it all is expensive.
+      # __test_window_start_date__ is resolved by macros/get_where_subquery.sql
+      # (today - var test_window_days).
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - source_database
+              - table_3_id
+              - event_date
+          config:
+            where: "event_date >= __test_window_start_date__"
+    columns:
+      - name: source_database
+        description: Source database the record comes from.
+        data_tests:
+          - not_null:
+              config:
+                where: "event_date >= __test_window_start_date__"
+      - name: table_3_id
+        description: ...
+        data_tests:
+          - not_null:
+              config:
+                where: "event_date >= __test_window_start_date__"
+      - name: event_date
+        description: ... Column the table is organized and reloaded by.
+        data_tests:
+          # No where on purpose: a date filter would never see rows with a NULL date.
+          - not_null
+          # Custom generic test (tests/generic/not_in_future.sql).
+          - not_in_future
+      - name: amount
+        description: ... NULL if the source value was not numeric.
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l2 · daily aggregate on the date-organized fact (composite key)
+  - name: vw_slv_l2_business_entity_2__agg_table_3_daily
+    description: ...
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - event_date
+              - source_database
+    columns:
+      - name: event_date
+        description: ...
+        data_tests:
+          - not_null
+      - name: source_database
+        description: Source database the record comes from.
+        data_tests:
+          - not_null
+      - name: record_count
+        description: Number of table_3 records on the day and source database.
+        data_tests:
+          - not_null
+      - name: total_amount
+        description: Sum of amount on the day and source database.
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"

@@ -1,0 +1,48 @@
+# =============================================================================
+# Seeds of business_entity_1
+#
+# Template conventions:
+#   - Only small, static reference data (catalogs, mappings) maintained by
+#     hand by the business that does not exist in any source system.
+#     If the data exists in a source, it is a source, not a seed.
+#   - Name: <domain>__<table>, in one subfolder per domain.
+#   - Explicit column_types: prevents the warehouse from inferring types
+#     (e.g. '01' as an integer) and from changing them when the CSV is edited.
+#     They come from the per-warehouse type table (var data_types in dbt_project.yml).
+#   - Schema (ds_seeds), color, labels and persist_docs are inherited from dbt_project.yml.
+#   - Seeds are never read directly from gold: a silver l0 model consumes them,
+#     casting and normalizing them like a bronze model would.
+# =============================================================================
+version: 2
+
+seeds:
+  - name: business_entity_1__table_2_group_map
+    description: >
+      Manual mapping of every table_2 catalog value to its reporting group.
+      Maintained by team_business_entity_1; unmapped values are reported as 'NO GROUP'.
+    config:
+      meta:
+        owner: team_business_entity_1
+      column_types:
+        table_2_id: "{{ var('data_types')[target.type].string }}"
+        group_id: "{{ var('data_types')[target.type].string }}"
+        group_desc: "{{ var('data_types')[target.type].string }}"
+        group_sort_order: "{{ var('data_types')[target.type].integer }}"
+    columns:
+      - name: table_2_id
+        description: Identifier of the table_2 catalog (field_a in bronze).
+        data_tests:
+          - not_null
+          - unique
+      - name: group_id
+        description: Identifier of the reporting group.
+        data_tests:
+          - not_null
+      - name: group_desc
+        description: Description of the reporting group.
+        data_tests:
+          - not_null
+      - name: group_sort_order
+        description: Display order of the group in reports.
+        data_tests:
+          - not_null

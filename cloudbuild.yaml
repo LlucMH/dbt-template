@@ -1,0 +1,90 @@
+# =============================================================================
+# CI/CD for poc_dbt: tests the project, builds the manifest and deploys it to
+# the Composer bucket.
+#
+#   1. test      lint + FULL dbt build on DuckDB with test data
+#                (macros/ci/load_ci_landing_data.sql), at no cost and with no
+#                credentials. Runs twice: the second pass tests the incremental
+#                model and the snapshots. Since the SQL is warehouse-agnostic,
+#                it validates the logic for every warehouse.
+#   2. manifest  installs the adapter of the deployment warehouse (_DBT_ADAPTER)
+#                and builds target/manifest.json with the deployment target,
+#                which is what Airflow reads.
+#   3. deploy    syncs the project (with dbt_packages/ and target/manifest.json)
+#                to the bucket. Deletes from the bucket whatever no longer exists
+#                in the project, so that Composer never runs deleted files.
+#
+# Variables: substitutions below, overridable in the Cloud Build trigger.
+# Warehouses other than BigQuery also need their connection variables
+# (DBT_SNOWFLAKE_*, DBT_DATABRICKS_*...) in the manifest step, ideally as
+# secretEnv from Secret Manager. See .env.example.
+# =============================================================================
+substitutions:
+  _DBT_ADAPTER: bigquery
+  _DBT_TARGET: prod
+  _DBT_BQ_LOCATION: europe-southwest1
+  _DBT_GCS_BUCKET: europe-southwest1-aaaa-bucket
+  _DBT_GCS_PATH: dags/dbt
+  _PYTHON_IMAGE: python:3.12-slim
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: test
+    name: ${_PYTHON_IMAGE}
+    entrypoint: bash
+    env:
+      - DBT_PROFILES_DIR=.
+      - DBT_ADAPTER=duckdb
+      - DBT_TARGET=ci
+      - DBT_TARGET_PATH=target_ci
+      - DBT_USER=ci
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        python -m venv .venv-ci
+        . .venv-ci/bin/activate
+        pip install --quiet --no-cache-dir -r requirements-dev.txt
+        sqlfluff lint models analyses tests
+        mkdir -p target_ci
+        dbt deps
+        dbt run-operation validate_model_naming
+        dbt run-operation load_ci_landing_data
+        dbt build
+        dbt build --select config.materialized:incremental resource_type:snapshot
+
+  - id: manifest
+    name: ${_PYTHON_IMAGE}
+    entrypoint: bash
+    env:
+      - DBT_PROFILES_DIR=.
+      - DBT_ADAPTER=${_DBT_ADAPTER}
+      - DBT_TARGET=${_DBT_TARGET}
+      - DBT_BQ_PROJECT=${PROJECT_ID}
+      - DBT_BQ_LOCATION=${_DBT_BQ_LOCATION}
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        python -m venv .venv-deploy
+        . .venv-deploy/bin/activate
+        pip install --quiet --no-cache-dir -r requirements/${_DBT_ADAPTER}.txt
+        dbt parse
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - storage
+      - rsync
+      - --recursive
+      - --delete-unmatched-destination-objects
+      # Only what dbt needs at run time is deployed. "$$" is a literal "$":
+      # Cloud Build treats a lone "$" as a substitution.
+      - --exclude=^\.git/|^\.claude/|^\.venv|^logs/|^target_ci/|^requirements|^sqlfluff_libs/|^\.sqlfluff|^\.env|^\.pre-commit-config\.yaml$$|^cloudbuild\.yaml$$|\.duckdb(\.wal)?$$
+      - .
+      - gs://${_DBT_GCS_BUCKET}/${_DBT_GCS_PATH}

@@ -1,0 +1,47 @@
+# dbt artifacts
+target/
+target_*/
+dbt_packages/
+dbt_internal_packages/
+logs/
+*.log
+.user.yml
+
+# Local configuration and secrets: .env holds each developer's values (see .env.example).
+# profiles.yml IS versioned: it only reads environment variables.
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.key
+
+# Claude Code: local sessions, settings and skills
+.claude/
+
+# Local databases (DuckDB) and local Airflow
+*.duckdb
+*.duckdb.wal
+airflow.db
+
+# Python
+.venv/
+venv/
+.venv-*/
+dbt-env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+.qodo
+
+# Operating system
+.DS_Store
+Thumbs.db
+desktop.ini

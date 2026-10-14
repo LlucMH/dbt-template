@@ -1,0 +1,132 @@
+# =============================================================================
+# Gold models of use_case_1
+#
+# Template conventions:
+#   - One models file per use case.
+#   - Model name: <tb|vw>_gld_l<n>_<use_case>__<table>
+#     (naming validated by macros/validate_model_naming.sql).
+#   - l0 reads from the silver layer; l<n> only reads from lower levels of gold.
+#   - Final products for a specific consumer (BI, files, applications).
+#   - Every exposed column is documented. Primary key: unique + not_null.
+#   - Enforced contract (dbt_project.yml): every column declares its data_type and
+#     the model fails if the SQL does not return exactly those columns and types.
+#     data_type comes from the per-warehouse type table (var data_types); the SQL
+#     casts every column with data_type(), from the same table, so they match on
+#     every warehouse.
+#   - Every model exposes _dbt_run_at (dbt_run_at() macro in the SQL).
+#   - Materialization is explicit in each model's config(); schema, tags,
+#     labels, color and the use case meta (owner, criticality, schedule,
+#     notify) are inherited from dbt_project.yml. Only model-specific meta is
+#     added here.
+# =============================================================================
+version: 2
+
+models:
+  # l0 · table (gold default materialization)
+  - name: tb_gld_l0_use_case_1__table_2_report
+    description: ...
+    config:
+      meta:
+        consumer: bi
+    columns:
+      - name: table_2_id
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: table_2_desc
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: ...
+        data_tests:
+          - not_null
+      - name: record_count
+        data_type: "{{ var('data_types')[target.type].integer }}"
+        description: Number of table_1 records linked to it.
+        data_tests:
+          - not_null
+      - name: record_share
+        data_type: "{{ var('data_types')[target.type].float }}"
+        description: Share of record_count over the total, between 0 and 1.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: _dbt_run_at
+        data_type: "{{ var('data_types')[target.type].timestamp }}"
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l0 · view (justified exception in the SQL: vw_ prefix)
+  - name: vw_gld_l0_use_case_1__table_1_detail
+    description: ...
+    config:
+      meta:
+        consumer: bi
+    columns:
+      - name: table_1_id
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: table_1_desc
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: ...
+      - name: table_2_id
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: ...
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('tb_gld_l0_use_case_1__table_2_report')
+                field: table_2_id
+      - name: table_2_desc
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: ...
+      - name: _dbt_run_at
+        data_type: "{{ var('data_types')[target.type].timestamp }}"
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l0 · table aggregated by the reporting group defined in the seed
+  - name: tb_gld_l0_use_case_1__group_report
+    description: table_1 records per reporting group and their share of the total.
+    config:
+      meta:
+        consumer: bi
+    columns:
+      - name: group_id
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: Identifier of the reporting group.
+        data_tests:
+          - not_null
+          - unique
+      - name: group_desc
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: Description of the reporting group.
+        data_tests:
+          - not_null
+      - name: group_sort_order
+        data_type: "{{ var('data_types')[target.type].integer }}"
+        description: Display order of the group.
+        data_tests:
+          - not_null
+      - name: record_count
+        data_type: "{{ var('data_types')[target.type].integer }}"
+        description: Number of table_1 records in the group.
+        data_tests:
+          - not_null
+      - name: record_share
+        data_type: "{{ var('data_types')[target.type].float }}"
+        description: Share of record_count over the total, between 0 and 1.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: _dbt_run_at
+        data_type: "{{ var('data_types')[target.type].timestamp }}"
+        description: "{{ doc('col_dbt_run_at') }}"

@@ -1,0 +1,6 @@
+# dbt dependencies for Snowflake. Install instead of requirements.txt in
+# environments that run on Snowflake:
+#   pip install -r requirements/snowflake.txt
+# dbt-core and the adapter are pinned together: versions tested with each other.
+dbt-core==1.11.16
+dbt-snowflake==1.11.6

@@ -1,0 +1,102 @@
+# =============================================================================
+# Gold models of use_case_2
+#
+# Template conventions:
+#   - One models file per use case.
+#   - Model name: <tb|vw>_gld_l<n>_<use_case>__<table>
+#     (naming validated by macros/validate_model_naming.sql).
+#   - l0 reads from the silver layer; l<n> only reads from lower levels of gold.
+#   - Final products for a specific consumer (BI, files, applications).
+#   - Every exposed column is documented. Primary key: unique + not_null.
+#   - Enforced contract (dbt_project.yml): every column declares its data_type and
+#     the model fails if the SQL does not return exactly those columns and types.
+#     data_type comes from the per-warehouse type table (var data_types); the SQL
+#     casts every column with data_type(), from the same table, so they match on
+#     every warehouse.
+#   - Every model exposes _dbt_run_at (dbt_run_at() macro in the SQL).
+#   - Materialization is explicit in each model's config(); schema, tags,
+#     labels, color and the use case meta (owner, criticality, schedule,
+#     notify) are inherited from dbt_project.yml. Only model-specific meta is
+#     added here.
+# =============================================================================
+version: 2
+
+models:
+  # l0 · table organized by date, exported to a file
+  - name: tb_gld_l0_use_case_2__daily_amount
+    description: ...
+    config:
+      # Overrides the criticality inherited from the use case: the file is
+      # picked up by a third party and a failure blocks their process.
+      meta:
+        consumer: file_export
+        export_format: csv
+        criticality: high
+    columns:
+      - name: event_date
+        data_type: "{{ var('data_types')[target.type].date }}"
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+          - not_in_future
+      - name: amount_source_database_1
+        data_type: "{{ var('data_types')[target.type].numeric }}"
+        description: Total amount of the day in source_database_1. NULL if there were no records.
+      - name: amount_source_database_2
+        data_type: "{{ var('data_types')[target.type].numeric }}"
+        description: Total amount of the day in source_database_2. NULL if there were no records.
+      - name: total_amount
+        data_type: "{{ var('data_types')[target.type].numeric }}"
+        description: Total amount of the day across all source databases.
+      - name: record_count
+        data_type: "{{ var('data_types')[target.type].integer }}"
+        description: Number of table_3 records on the day.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+      - name: _dbt_run_at
+        data_type: "{{ var('data_types')[target.type].timestamp }}"
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l1 · table that reads from the l0 model of its own layer
+  - name: tb_gld_l1_use_case_2__monthly_amount
+    description: ...
+    config:
+      meta:
+        consumer: bi
+    columns:
+      - name: month_start_date
+        data_type: "{{ var('data_types')[target.type].date }}"
+        description: First day of the month.
+        data_tests:
+          - not_null
+          - unique
+      - name: amount_source_database_1
+        data_type: "{{ var('data_types')[target.type].numeric }}"
+        description: Total amount of the month in source_database_1.
+      - name: amount_source_database_2
+        data_type: "{{ var('data_types')[target.type].numeric }}"
+        description: Total amount of the month in source_database_2.
+      - name: total_amount
+        data_type: "{{ var('data_types')[target.type].numeric }}"
+        description: Total amount of the month across all source databases.
+      - name: record_count
+        data_type: "{{ var('data_types')[target.type].integer }}"
+        description: Number of table_3 records in the month.
+        data_tests:
+          - not_null
+      - name: days_with_data
+        data_type: "{{ var('data_types')[target.type].integer }}"
+        description: Days of the month with at least one record.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+                max_value: 31
+      - name: _dbt_run_at
+        data_type: "{{ var('data_types')[target.type].timestamp }}"
+        description: "{{ doc('col_dbt_run_at') }}"

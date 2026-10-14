@@ -1,0 +1,56 @@
+# =============================================================================
+# Exposures of use_case_2
+#
+# Template conventions:
+#   - One exposures file per use case, next to its models YAML.
+#   - One exposure per real consumer (dashboard, file, application),
+#     consistent with meta.consumer of the models it reads.
+#   - tags: the use case and how often the exposure must be refreshed
+#     (daily | weekly | monthly). Airflow builds everything the exposures need with:
+#       dbt build --select +tag:daily                       (every daily exposure)
+#       dbt build --select "+tag:use_case_2,+tag:monthly"   (one use case and schedule)
+#   - owner: team identifier, never real email addresses.
+#   - url: fill in with the consumer's real link when it exists.
+# =============================================================================
+version: 2
+
+exposures:
+  # CSV file picked up by a third party: a failure blocks their process.
+  - name: use_case_2__daily_amount_export
+    label: Daily amount CSV export (use_case_2)
+    type: application
+    maturity: high
+    description: >
+      CSV file with the daily amount of table_3 per source database, picked up
+      by a third party for its own process.
+    owner:
+      name: team_use_case_2
+    depends_on:
+      - ref('tb_gld_l0_use_case_2__daily_amount')
+    config:
+      tags: ["use_case_2", "daily"]
+      meta:
+        use_case: use_case_2
+        consumer: file_export
+        export_format: csv
+        criticality: high
+        schedule: daily
+
+  # Monthly summary: refreshing it once a month, after month end, is enough.
+  - name: use_case_2__monthly_amount_dashboard
+    label: Monthly amount dashboard (use_case_2)
+    type: dashboard
+    maturity: medium
+    description: >
+      Monthly summary of the table_3 amount per source database in the BI
+      dashboard.
+    owner:
+      name: team_use_case_2
+    depends_on:
+      - ref('tb_gld_l1_use_case_2__monthly_amount')
+    config:
+      tags: ["use_case_2", "monthly"]
+      meta:
+        use_case: use_case_2
+        consumer: bi
+        schedule: monthly

@@ -1,0 +1,237 @@
+# =============================================================================
+# poc_dbt — warehouse-agnostic dbt project template
+#
+# Supported warehouses: BigQuery, Snowflake, Databricks, Redshift, Postgres
+# and DuckDB (local development and CI). Selected with DBT_ADAPTER (see .env.example).
+# Everything warehouse-specific lives in four places:
+#   - profiles.yml                     connection for each warehouse
+#   - var data_types + data_type()     physical data types
+#   - macros/config_by_date.sql        physical layout and incremental strategy
+#   - dbt cross-database macros        functions (dbt.safe_cast, dbt.dateadd...)
+#
+# Layers (medallion):
+#   bronze (brz) -> staging: renaming, casting, light cleaning
+#   silver (slv) -> reusable transformations, not exposed
+#   gold   (gld) -> final products per use case
+#
+# Conventions:
+#   - The database / project is NOT set here: profiles.yml decides it.
+#   - Schema names (datasets in BigQuery) are resolved by macros/generate_schema_name.sql
+#     (exact names in shared targets, suffixed with the user everywhere else).
+#   - Every model declares its materialization explicitly in its own config().
+#     The folder defaults below are only a safety net.
+#   - Configuration is inherited: only what changes is repeated.
+# =============================================================================
+
+name: poc_dbt
+version: "1.0.0"
+config-version: 2
+require-dbt-version: [">=1.10.0", "<2.0.0"]
+
+# One profile per warehouse in profiles.yml: poc_dbt_<DBT_ADAPTER>.
+profile: "{{ 'poc_dbt_' ~ env_var('DBT_ADAPTER', 'bigquery') }}"
+
+# Project macros take precedence over dbt macros with the same name
+# (e.g. macros/adapters/duckdb__safe_cast.sql).
+dispatch:
+  - macro_namespace: dbt
+    search_order: ["poc_dbt", "dbt"]
+
+# Fails before running anything if a model breaks the naming convention:
+#   <tb|vw|ep>_<brz|slv|gld>_l<n>_<domain>__<table>
+on-run-start:
+  - "{{ validate_model_naming() }}"
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Adds a comment with dbt metadata (target, node_id...) to every query.
+# job-label: BigQuery also stores it as job labels, to attribute cost per
+# model / layer in INFORMATION_SCHEMA.JOBS. Other warehouses ignore it.
+query-comment:
+  job-label: true
+
+flags:
+  send_anonymous_usage_stats: false
+  require_explicit_package_overrides_for_builtin_materializations: true
+
+vars:
+  # Data types per warehouse: the single source of truth for types.
+  # SQL: CAST(x AS {{ data_type('string') }})   YAML: "{{ var('data_types')[target.type].string }}"
+  # To support another warehouse, add its entry here (plus its branch in
+  # macros/config_by_date.sql and its profile in profiles.yml).
+  data_types:
+    bigquery:   {string: STRING,           integer: INT64,  float: FLOAT64,          numeric: NUMERIC,         date: DATE, timestamp: TIMESTAMP,     boolean: BOOL}
+    snowflake:  {string: VARCHAR,          integer: BIGINT, float: FLOAT,            numeric: "NUMBER(38,6)",  date: DATE, timestamp: TIMESTAMP_NTZ, boolean: BOOLEAN}
+    databricks: {string: STRING,           integer: BIGINT, float: DOUBLE,           numeric: "DECIMAL(38,6)", date: DATE, timestamp: TIMESTAMP,     boolean: BOOLEAN}
+    redshift:   {string: "VARCHAR(65535)", integer: BIGINT, float: DOUBLE PRECISION, numeric: "NUMERIC(38,6)", date: DATE, timestamp: TIMESTAMP,     boolean: BOOLEAN}
+    postgres:   {string: TEXT,             integer: BIGINT, float: DOUBLE PRECISION, numeric: "NUMERIC(38,6)", date: DATE, timestamp: TIMESTAMP,     boolean: BOOLEAN}
+    duckdb:     {string: VARCHAR,          integer: BIGINT, float: DOUBLE,           numeric: "DECIMAL(38,6)", date: DATE, timestamp: TIMESTAMP,     boolean: BOOLEAN}
+  # Targets that write to the exact shared schemas (ds_gld_use_case_1).
+  # Any other target adds the DBT_USER suffix (macros/generate_schema_name.sql).
+  shared_targets: ["ideacion", "prod"]
+  # Maximum length of model, seed and snapshot names (validate_model_naming).
+  # 63 is the Postgres limit, the strictest of the supported warehouses.
+  max_name_length: 63
+  # Days covered by tests filtered with __test_window_start_date__ (get_where_subquery).
+  test_window_days: 7
+  # Days reprocessed by every incremental run of
+  # tb_slv_l1_business_entity_2__fact_table_3_partitioned (late-arriving records).
+  business_entity_2_reprocess_days: 3
+
+# -----------------------------------------------------------------------------
+# Seeds — blue
+# Only small, static reference data (catalogs, mappings).
+# Never business data that should come from a source.
+# -----------------------------------------------------------------------------
+seeds:
+  poc_dbt:
+    +tags: seed
+    +schema: ds_seeds
+    +quote_columns: false
+    +persist_docs:
+      relation: true
+      columns: true
+    +docs:
+      node_color: "#1F77B4"
+    +labels:
+      dbt_project: poc_dbt
+      layer: seed
+
+    business_entity_1:
+      +tags: business_entity_1
+
+# -----------------------------------------------------------------------------
+# Models
+# -----------------------------------------------------------------------------
+models:
+  poc_dbt:
+    +persist_docs:
+      relation: true
+      columns: true
+    +materialized: table
+    # Only affects incremental models: fail on schema changes instead of
+    # propagating them silently.
+    +on_schema_change: fail
+    # Cost attribution: labels in BigQuery, query_tag in Snowflake.
+    # Each warehouse ignores the ones that are not its own.
+    +query_tag: poc_dbt
+
+    # ---------------------------------------------------------------- BRONZE
+    bronze:
+      +tags: brz
+      +materialized: view
+      +access: protected
+      +docs:
+        node_color: "#CD7F32"
+      +labels:
+        dbt_project: poc_dbt
+        layer: bronze
+
+      source_database_1:
+        +tags: source_database_1
+        +schema: ds_brz_source_database_1
+
+      source_database_2:
+        +tags: source_database_2
+        +schema: ds_brz_source_database_2
+
+    # ---------------------------------------------------------------- SILVER
+    silver:
+      +tags: slv
+      +materialized: view   # switch a model to table only for performance reasons
+      +access: protected
+      +docs:
+        node_color: "#C0C0C0"
+      +labels:
+        dbt_project: poc_dbt
+        layer: silver
+
+      business_entity_1:
+        +tags: business_entity_1
+        +schema: ds_slv_business_entity_1
+
+      business_entity_2:
+        +tags: business_entity_2
+        +schema: ds_slv_business_entity_2
+
+    # ------------------------------------------------------------------ GOLD
+    gold:
+      +tags: gld
+      +materialized: table
+      +access: public
+      # Contract: the model fails if its columns or types do not match the
+      # ones declared (data_type) in its YAML. Protects gold consumers from
+      # accidental schema changes.
+      +contract:
+        enforced: true
+      +docs:
+        node_color: "#D4AF37"
+      +labels:
+        dbt_project: poc_dbt
+        layer: gold
+
+      # Metadata read by Airflow from manifest.json.
+      # owner/notify: team identifiers, never real email addresses here.
+      use_case_1:
+        +tags: use_case_1
+        +schema: ds_gld_use_case_1
+        +labels:
+          use_case: use_case_1
+        +meta:
+          use_case: use_case_1
+          owner: team_use_case_1
+          criticality: medium      # low | medium | high
+          schedule: daily          # daily | weekly | monthly | custom
+          notify: team_use_case_1
+
+      use_case_2:
+        +tags: use_case_2
+        +schema: ds_gld_use_case_2
+        +labels:
+          use_case: use_case_2
+        +meta:
+          use_case: use_case_2
+          owner: team_use_case_2
+          criticality: medium
+          schedule: daily
+          notify: team_use_case_2
+
+# -----------------------------------------------------------------------------
+# Snapshots
+# -----------------------------------------------------------------------------
+snapshots:
+  poc_dbt:
+    +tags: snapshot
+    +schema: ds_snapshots
+    +persist_docs:
+      relation: true
+      columns: true
+    +labels:
+      dbt_project: poc_dbt
+      layer: snapshot
+
+    source_database_1:
+      +tags: source_database_1
+
+    source_database_2:
+      +tags: source_database_2
+
+# -----------------------------------------------------------------------------
+# Data tests
+# -----------------------------------------------------------------------------
+data_tests:
+  poc_dbt:
+    +severity: error
+    # Enable temporarily for debugging; failing rows are stored here.
+    +store_failures: false
+    +schema: ds_test_failures

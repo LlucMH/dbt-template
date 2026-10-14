@@ -1,0 +1,99 @@
+[sqlfluff]
+# ansi: model SQL is portable across warehouses, so it is checked against the
+# standard. Warehouse-specific parts come from macros (data_type(), dbt.safe_cast...),
+# replaced here by stubs (sqlfluff_libs/).
+# To review the SQL of a specific warehouse: sqlfluff lint --dialect <warehouse>
+dialect = ansi
+# Jinja templater: fast and with no connection to any warehouse (fine for CI and pre-commit).
+templater = jinja
+
+warnings = AM01, AM04, RF04, CP02
+exclude_rules = AL01, AL05, ST06
+
+max_line_length = 120
+large_file_skip_byte_limit = 0
+
+# -----------------------------------------------------------------------------
+# Capitalisation: keywords, functions, literals and types in upper case;
+# identifiers in lower case.
+# -----------------------------------------------------------------------------
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+# -----------------------------------------------------------------------------
+# References and ambiguity
+# -----------------------------------------------------------------------------
+[sqlfluff:rules:references.keywords]
+ignore_words = date, language, leave, zone, account, name, source, target, chain, user, format, week, quarter
+
+[sqlfluff:rules:references.consistent]
+single_table_references = unqualified
+
+[sqlfluff:rules:ambiguous.column_references]
+group_by_and_order_by_style = explicit
+
+# -----------------------------------------------------------------------------
+# Layout
+# -----------------------------------------------------------------------------
+[sqlfluff:indentation]
+indented_joins = False
+indented_using_on = True
+template_blocks_indent = False
+
+[sqlfluff:layout:type:comma]
+line_position = trailing
+
+[sqlfluff:rules:layout.long_lines]
+ignore_comment_lines = True
+
+# -----------------------------------------------------------------------------
+# Conventions
+# -----------------------------------------------------------------------------
+[sqlfluff:rules:convention.quoted_literals]
+preferred_quoted_literal_style = consistent
+
+[sqlfluff:rules:convention.terminator]
+multiline_newline = True
+
+[sqlfluff:rules:aliasing.table]
+aliasing = explicit
+
+[sqlfluff:rules:aliasing.column]
+aliasing = explicit
+
+# -----------------------------------------------------------------------------
+# Jinja templater
+# -----------------------------------------------------------------------------
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = True
+# Python stubs of the project macros and of dbt.* (see sqlfluff_libs/__init__.py).
+library_path = sqlfluff_libs
+
+[sqlfluff:templater:jinja:context]
+invocation_id = 1
+
+[sqlfluff:templater:jinja:macros]
+# env_var stub with the same signature as dbt's (accepts a default value).
+dbt_env_var = {% macro env_var(var, default=none) %}'{{ var }}'{% endmacro %}
+
+# -----------------------------------------------------------------------------
+# Alternative: dbt templater (compiles with real dbt; requires sqlfluff-templater-dbt
+# and an installed adapter). With DuckDB it needs no connection to any warehouse.
+# -----------------------------------------------------------------------------
+# [sqlfluff:templater:dbt]
+# project_dir = .
+# profiles_dir = .
+# profile = poc_dbt_duckdb
+# target = ci

@@ -1,0 +1,6 @@
+table_2_id,group_id,group_desc,group_sort_order
+A01,G1,Group 1,1
+A02,G1,Group 1,1
+B01,G2,Group 2,2
+B02,G2,Group 2,2
+C01,G3,Group 3,3

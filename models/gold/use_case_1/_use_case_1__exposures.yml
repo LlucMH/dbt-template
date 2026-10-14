@@ -1,0 +1,36 @@
+# =============================================================================
+# Exposures of use_case_1
+#
+# Template conventions:
+#   - One exposures file per use case, next to its models YAML.
+#   - One exposure per real consumer (dashboard, file, application),
+#     consistent with meta.consumer of the models it reads.
+#   - tags: the use case and how often the exposure must be refreshed
+#     (daily | weekly | monthly). Airflow builds everything the exposures need with:
+#       dbt build --select +tag:daily                       (every daily exposure)
+#       dbt build --select "+tag:use_case_2,+tag:monthly"   (one use case and schedule)
+#   - owner: team identifier, never real email addresses.
+#   - url: fill in with the consumer's real link when it exists.
+# =============================================================================
+version: 2
+
+exposures:
+  - name: use_case_1__table_2_dashboard
+    label: table_2 dashboard (use_case_1)
+    type: dashboard
+    maturity: medium
+    description: >
+      BI dashboard with the share of table_1 per table_2 and per reporting
+      group, with drill-down to the detail of every record.
+    owner:
+      name: team_use_case_1
+    depends_on:
+      - ref('tb_gld_l0_use_case_1__table_2_report')
+      - ref('vw_gld_l0_use_case_1__table_1_detail')
+      - ref('tb_gld_l0_use_case_1__group_report')
+    config:
+      tags: ["use_case_1", "daily"]
+      meta:
+        use_case: use_case_1
+        consumer: bi
+        schedule: daily

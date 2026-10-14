@@ -1,0 +1,145 @@
+# =============================================================================
+# Connection profiles of poc_dbt: one per warehouse (poc_dbt_<DBT_ADAPTER>).
+#
+# Versioned with the project because it holds no secrets: everything comes
+# from environment variables (see .env.example). Only the variables of the
+# active profile are read: the ones of other warehouses may not exist.
+#
+# Every profile has the same targets:
+#   local     schemas suffixed with the user (DBT_USER)
+#   ideacion  exact shared schemas (var shared_targets)
+#   prod      exact shared schemas
+# and DuckDB also has:
+#   ci        throwaway local database for the CI `dbt build`
+#
+# Selection:  DBT_ADAPTER=<bigquery|snowflake|databricks|redshift|postgres|duckdb>
+#             DBT_TARGET=<local|ideacion|prod|ci>
+# =============================================================================
+
+# ----------------------------------------------------------------- BigQuery
+# Authentication: Google Application Default Credentials (ADC).
+#   local: gcloud auth application-default login   ·   Composer: its service account
+poc_dbt_bigquery:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local: &bigquery
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('DBT_BQ_PROJECT', '') }}"
+      # Dataset for nodes without +schema; every node in the template sets one.
+      dataset: ds_dbt_default
+      location: "{{ env_var('DBT_BQ_LOCATION', 'europe-southwest1') }}"
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+      impersonate_service_account: "{{ env_var('DBT_BQ_IMPERSONATE_SERVICE_ACCOUNT', '') }}"
+      priority: interactive
+      job_execution_timeout_seconds: 900
+      job_retries: 1
+      # Development safety net: a query scanning more than this fails.
+      maximum_bytes_billed: "{{ env_var('DBT_BQ_MAXIMUM_BYTES_BILLED', '100000000000') | as_number }}"
+    ideacion:
+      <<: *bigquery
+      maximum_bytes_billed: null
+    prod:
+      <<: *bigquery
+      maximum_bytes_billed: null
+      priority: batch
+      job_execution_timeout_seconds: 3600
+      job_retries: 2
+
+# ---------------------------------------------------------------- Snowflake
+# Authentication: SSO (externalbrowser) locally; key pair in ideacion/prod.
+poc_dbt_snowflake:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local: &snowflake
+      type: snowflake
+      account: "{{ env_var('DBT_SNOWFLAKE_ACCOUNT', '') }}"
+      user: "{{ env_var('DBT_SNOWFLAKE_USER', '') }}"
+      role: "{{ env_var('DBT_SNOWFLAKE_ROLE', '') }}"
+      warehouse: "{{ env_var('DBT_SNOWFLAKE_WAREHOUSE', '') }}"
+      database: "{{ env_var('DBT_SNOWFLAKE_DATABASE', '') }}"
+      schema: ds_dbt_default
+      authenticator: externalbrowser
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+      client_session_keep_alive: false
+      query_tag: poc_dbt
+    ideacion: &snowflake_service
+      <<: *snowflake
+      authenticator: snowflake_jwt
+      private_key_path: "{{ env_var('DBT_SNOWFLAKE_PRIVATE_KEY_PATH', '') }}"
+    prod:
+      <<: *snowflake_service
+
+# --------------------------------------------------------------- Databricks
+# Authentication: token (personal locally, service principal in ideacion/prod).
+poc_dbt_databricks:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local: &databricks
+      type: databricks
+      host: "{{ env_var('DBT_DATABRICKS_HOST', '') }}"
+      http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH', '') }}"
+      token: "{{ env_var('DBT_DATABRICKS_TOKEN', '') }}"
+      catalog: "{{ env_var('DBT_DATABRICKS_CATALOG', '') }}"
+      schema: ds_dbt_default
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+    ideacion:
+      <<: *databricks
+    prod:
+      <<: *databricks
+
+# ----------------------------------------------------------------- Redshift
+# Authentication: user and password (or method: iam if configured).
+poc_dbt_redshift:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local: &redshift
+      type: redshift
+      host: "{{ env_var('DBT_REDSHIFT_HOST', '') }}"
+      port: "{{ env_var('DBT_REDSHIFT_PORT', '5439') | as_number }}"
+      user: "{{ env_var('DBT_REDSHIFT_USER', '') }}"
+      password: "{{ env_var('DBT_REDSHIFT_PASSWORD', '') }}"
+      dbname: "{{ env_var('DBT_REDSHIFT_DBNAME', '') }}"
+      schema: ds_dbt_default
+      sslmode: require
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+    ideacion:
+      <<: *redshift
+    prod:
+      <<: *redshift
+
+# ----------------------------------------------------------------- Postgres
+poc_dbt_postgres:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local: &postgres
+      type: postgres
+      host: "{{ env_var('DBT_POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('DBT_POSTGRES_PORT', '5432') | as_number }}"
+      user: "{{ env_var('DBT_POSTGRES_USER', '') }}"
+      password: "{{ env_var('DBT_POSTGRES_PASSWORD', '') }}"
+      dbname: "{{ env_var('DBT_POSTGRES_DBNAME', '') }}"
+      schema: ds_dbt_default
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+    ideacion:
+      <<: *postgres
+    prod:
+      <<: *postgres
+
+# ------------------------------------------------------------------- DuckDB
+# Local file: development without a warehouse and CI (full `dbt build` at no cost).
+poc_dbt_duckdb:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local: &duckdb
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'poc_dbt.duckdb') }}"
+      schema: ds_dbt_default
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+    ci:
+      <<: *duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'target_ci/ci.duckdb') }}"
+    ideacion:
+      <<: *duckdb
+    prod:
+      <<: *duckdb

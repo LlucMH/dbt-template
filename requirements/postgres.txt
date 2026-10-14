@@ -1,0 +1,6 @@
+# dbt dependencies for Postgres. Install instead of requirements.txt in
+# environments that run on Postgres:
+#   pip install -r requirements/postgres.txt
+# dbt-core and the adapter are pinned together: versions tested with each other.
+dbt-core==1.11.16
+dbt-postgres==1.11.0

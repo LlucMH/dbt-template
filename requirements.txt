@@ -1,0 +1,11 @@
+# Runtime dependencies for the production warehouse (BigQuery).
+# Installed by Composer/Airflow, Cloud Build and local development:
+#   pip install -r requirements.txt
+# For another warehouse, install requirements/<adapter>.txt instead.
+# dbt-core and the adapter are pinned together: versions tested with each other.
+dbt-core==1.11.15
+dbt-bigquery==1.11.3
+# pandas 3 breaks db-dtypes (a dbt-bigquery dependency):
+# "module 'pandas' has no attribute 'core'". Remove this cap once db-dtypes
+# releases a compatible version.
+pandas<3

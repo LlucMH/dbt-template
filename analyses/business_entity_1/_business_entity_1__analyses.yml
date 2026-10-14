@@ -1,0 +1,56 @@
+# =============================================================================
+# Analyses of business_entity_1
+#
+# Template conventions:
+#   - An analysis is SQL that dbt compiles but never materializes: ad hoc
+#     queries, quality reviews or investigations worth versioning, using
+#     ref()/source() so that no database or schema is hardcoded.
+#   - Name: <domain>__<description>, in one subfolder per domain.
+#   - If an analysis is queried regularly, it becomes a model; if it checks
+#     something that should never happen, it becomes a test.
+#   - Compile: dbt compile --select <name>   (or path:analyses/<domain>)
+#     Output in target/compiled/poc_dbt/analyses/<domain>/<name>.sql
+# =============================================================================
+version: 2
+
+analyses:
+  - name: business_entity_1__group_mapping_gaps
+    description: >
+      table_2 catalog values with no group in the seed
+      business_entity_1__table_2_group_map, and seed rows that no longer exist
+      in the catalog, sorted by the number of records affected.
+      Review it before updating the seed CSV.
+    config:
+      tags: ["business_entity_1"]
+    columns:
+      - name: table_2_id
+        description: Identifier of the table_2 catalog.
+      - name: table_2_desc
+        description: Description in the catalog; NULL for an orphan group.
+      - name: group_id
+        description: Group assigned in the seed; NULL if it has no group.
+      - name: group_desc
+        description: Description of the group in the seed; NULL if it has no group.
+      - name: record_count
+        description: table_1 records with this value (0 if none).
+      - name: gap_type
+        description: "'no_group' (missing from the seed) or 'orphan_group' (extra in the seed)."
+
+  - name: business_entity_1__table_2_change_history
+    description: >
+      Changes per day in the table_2 catalog, from its SCD2 history: first
+      versions, updates and deletions. Helps choose the snapshot frequency and
+      spot unexpected mass changes.
+    config:
+      tags: ["business_entity_1"]
+    columns:
+      - name: change_date
+        description: Day on which the versions started.
+      - name: first_versions
+        description: Values that appeared for the first time that day.
+      - name: updated_versions
+        description: New versions of existing values that day.
+      - name: deletions
+        description: Values deleted in the source that day.
+      - name: values_affected
+        description: Distinct table_2_id values with any change that day.

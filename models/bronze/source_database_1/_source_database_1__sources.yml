@@ -1,0 +1,83 @@
+# =============================================================================
+# Sources of source_database_1
+#
+# Template conventions:
+#   - One sources file per source database, next to its bronze models:
+#       _source_database_1__sources.yml  -> what is read (landing tables)
+#       _source_database_1__models.yml   -> what is exposed (bronze models)
+#   - name = clean logical name; identifier = real physical name in the warehouse.
+#     Typos are fixed in name, never in identifier.
+#   - The database (project in BigQuery, catalog in Databricks) is not
+#     hardcoded: DBT_SOURCE_DATABASE or, by default, the one of the active target.
+#   - quoting.identifier: physical names may contain hyphens, which are invalid
+#     without quotes in most warehouses. In Snowflake quotes make the name
+#     case-sensitive: identifier must match exactly.
+#   - freshness, loaded_at_field, meta and tags go under config (dbt >= 1.10 and Fusion).
+#   - Only bronze models read from source(); everything else uses ref().
+#   - Only freshness and not_null on keys here; uniqueness and relationships
+#     go in the models YAML.
+# =============================================================================
+version: 2
+
+sources:
+  - name: source_database_1
+    description: ...
+    database: "{{ env_var('DBT_SOURCE_DATABASE', target.database) }}"
+    quoting:
+      identifier: true
+    schema: ds_lnd_source_database_1
+    loader: airflow
+
+    config:
+      tags: ["source_database_1"]
+      meta:
+        owner: team_source_database_1
+        source_system: source_database_1
+      loaded_at_field: _ingestion_timestamp
+      freshness:
+        warn_after: {count: 24, period: hour}
+        error_after: {count: 48, period: hour}
+
+    tables:
+      # Table with freshness inherited from the source
+      # -> vw_brz_l0_source_database_1__table_1
+      - name: table_1
+        identifier: tbl-lnd-source_database_1-table_1
+        description: ...
+        columns:
+          - name: src_col_1
+            description: ...
+            data_tests:
+              - not_null
+
+      # Static table (catalog): no freshness check
+      # -> vw_brz_l0_source_database_1__table_2
+      - name: table_2
+        identifier: tbl-lnd-source_database_1-table_2
+        description: ...
+        config:
+          freshness: null
+        columns:
+          - name: src_col_a
+            description: ...
+            data_tests:
+              - not_null
+
+      # High-volume table with a composite key: stricter freshness
+      # -> vw_brz_l0_source_database_1__table_3
+      - name: table_3
+        identifier: tbl-lnd-source_database_1-table_3
+        description: ...
+        config:
+          freshness:
+            warn_after: {count: 6, period: hour}
+            error_after: {count: 12, period: hour}
+        columns:
+          - name: src_col_x
+            description: ...
+            data_tests:
+              - not_null
+          - name: src_col_y
+            description: ...
+            data_tests:
+              - not_null

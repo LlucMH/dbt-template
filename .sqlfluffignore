@@ -1,0 +1,8 @@
+target/
+target_*/
+dbt_packages/
+logs/
+macros/
+# Generic tests are Jinja macros ({% test %}), not models: nothing to lint.
+tests/generic/
+.venv/

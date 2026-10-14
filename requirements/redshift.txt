@@ -1,0 +1,6 @@
+# dbt dependencies for Redshift. Install instead of requirements.txt in
+# environments that run on Redshift:
+#   pip install -r requirements/redshift.txt
+# dbt-core and the adapter are pinned together: versions tested with each other.
+dbt-core==1.11.16
+dbt-redshift==1.11.1

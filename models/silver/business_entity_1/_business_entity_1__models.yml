@@ -1,0 +1,191 @@
+# =============================================================================
+# Silver models of business_entity_1
+#
+# Template conventions:
+#   - One models file per business entity.
+#   - Model name: <tb|vw|ep>_slv_l<n>_<business_entity>__<type>_<table>
+#     with type fact_ | dim_ | scd_ | bridge_ | agg_
+#     (naming validated by macros/validate_model_naming.sql).
+#   - l0 reads from the bronze layer (or from seeds and snapshots);
+#     l<n> only reads from lower levels of silver.
+#   - Business logic lives here, visible in SQL, never hidden in macros.
+#   - Every exposed column is documented. Primary key: unique + not_null.
+#   - Every model exposes _dbt_run_at (dbt_run_at() macro in the SQL).
+#   - Materialization is explicit in each model's config(); schema, tags,
+#     labels and color are inherited from dbt_project.yml.
+# =============================================================================
+version: 2
+
+models:
+  # l0 · dimension
+  - name: vw_slv_l0_business_entity_1__dim_table_2
+    description: ...
+    columns:
+      - name: table_2_id
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: table_2_desc
+        description: ...
+        data_tests:
+          - not_null
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l0 · dimension built from a seed
+  - name: vw_slv_l0_business_entity_1__dim_table_2_group
+    description: >
+      Reporting groups of table_2, read from the seed
+      business_entity_1__table_2_group_map with a normalized key.
+    columns:
+      - name: table_2_id
+        description: Identifier of the table_2 catalog, normalized (upper case, no spaces).
+        data_tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('vw_slv_l0_business_entity_1__dim_table_2')
+                field: table_2_id
+              config:
+                severity: warn
+      - name: group_id
+        description: Identifier of the reporting group.
+        data_tests:
+          - not_null
+      - name: group_desc
+        description: Description of the reporting group.
+        data_tests:
+          - not_null
+      - name: group_sort_order
+        description: Display order of the group in reports.
+        data_tests:
+          - not_null
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l0 · fact
+  - name: vw_slv_l0_business_entity_1__fact_table_1
+    description: ...
+    columns:
+      - name: table_1_id
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: table_1_desc
+        description: ...
+      - name: table_2_id
+        description: ...
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('vw_slv_l0_business_entity_1__dim_table_2')
+                field: table_2_id
+              config:
+                severity: warn
+      - name: is_valid_relationship
+        description: TRUE if table_2_id exists in the table_2 catalog.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l0 · SCD2 history built from a snapshot
+  - name: vw_slv_l0_business_entity_1__scd_table_2
+    description: >
+      History of the table_2 catalog (one row per version), built from the
+      snapshot snp_source_database_1__table_2.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - table_2_id
+              - valid_from
+    columns:
+      - name: table_2_id
+        description: Identifier of the table_2 catalog.
+        data_tests:
+          - not_null
+      - name: table_2_desc
+        description: Description of the catalog in this version.
+      - name: valid_from
+        description: Start of the version's validity (inclusive).
+        data_tests:
+          - not_null
+      - name: valid_to
+        description: End of the version's validity (exclusive); 9999-12-31 for the current one.
+        data_tests:
+          - not_null
+      - name: is_current
+        description: >
+          TRUE for the latest version. A current version with is_deleted = TRUE
+          means the value no longer exists in the source.
+        data_tests:
+          - not_null
+      - name: is_deleted
+        description: TRUE if the version records a deletion in the source.
+        data_tests:
+          - not_null
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l1 · dimension enriched with the seed
+  - name: vw_slv_l1_business_entity_1__dim_table_2_with_group
+    description: table_2 catalog with its reporting group; unmapped values go to 'NO GROUP'.
+    columns:
+      - name: table_2_id
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: table_2_desc
+        description: ...
+      - name: group_id
+        description: Identifier of the reporting group; 'NO_GROUP' if it is not in the seed.
+        data_tests:
+          - not_null
+      - name: group_desc
+        description: Description of the reporting group; 'NO GROUP' if it is not in the seed.
+        data_tests:
+          - not_null
+      - name: group_sort_order
+        description: Display order of the group; 999 if it is not in the seed.
+        data_tests:
+          - not_null
+      - name: is_group_mapped
+        description: TRUE if table_2_id has a group in the seed. Helps spot gaps in the mapping.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # l1 · aggregate
+  - name: tb_slv_l1_business_entity_1__agg_table_1_by_table_2
+    description: ...
+    columns:
+      - name: table_2_id
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: table_2_desc
+        description: ...
+      - name: record_count
+        description: Number of table_1 records linked to it.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"

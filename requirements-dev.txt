@@ -1,0 +1,7 @@
+# Development and CI tooling, on top of the runtime dependencies:
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+# DuckDB adapter: local runs and the CI `dbt build` without a warehouse.
+dbt-duckdb==1.11.0
+sqlfluff==3.4.2
+pre-commit==4.6.2

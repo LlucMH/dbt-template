@@ -1,0 +1,82 @@
+# =============================================================================
+# Bronze models of source_database_1
+#
+# Template conventions:
+#   - One models file per source database, next to its sources file:
+#       _source_database_1__sources.yml  -> what is read (landing tables)
+#       _source_database_1__models.yml   -> what is exposed (bronze models)
+#   - Model name: <tb|vw|ep>_brz_l<n>_<source_database>__<table>
+#     (naming validated by macros/validate_model_naming.sql).
+#   - One model per source table: renaming, casting and light cleaning.
+#     No joins between entities, no aggregations, no business logic.
+#   - Every exposed column is documented. Primary key: unique + not_null.
+#   - Every model exposes _dbt_run_at (dbt_run_at() macro in the SQL).
+#   - Materialization is explicit in each model's config(); schema, tags,
+#     labels and color are inherited from dbt_project.yml.
+# =============================================================================
+version: 2
+
+models:
+  # Simple primary key + relationship with another bronze model
+  - name: vw_brz_l0_source_database_1__table_1
+    description: ...
+    columns:
+      - name: field_1
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: field_2
+        description: ...
+      - name: field_3
+        description: ...
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('vw_brz_l0_source_database_1__table_2')
+                field: field_a
+              config:
+                severity: warn
+      - name: updated_at
+        description: Time the record was loaded into landing. Drives the timestamp snapshot.
+        data_tests:
+          - not_null
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # Simple primary key
+  - name: vw_brz_l0_source_database_1__table_2
+    description: ...
+    columns:
+      - name: field_a
+        description: ...
+        data_tests:
+          - not_null
+          - unique
+      - name: field_b
+        description: ...
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"
+
+  # Composite primary key
+  - name: vw_brz_l0_source_database_1__table_3
+    description: ...
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - field_x
+              - field_y
+    columns:
+      - name: field_x
+        description: ...
+        data_tests:
+          - not_null
+      - name: field_y
+        description: ...
+        data_tests:
+          - not_null
+      - name: field_z
+        description: ...
+      - name: _dbt_run_at
+        description: "{{ doc('col_dbt_run_at') }}"

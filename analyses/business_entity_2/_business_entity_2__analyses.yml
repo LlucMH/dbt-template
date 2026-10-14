@@ -1,0 +1,38 @@
+# =============================================================================
+# Analyses of business_entity_2
+#
+# Template conventions:
+#   - An analysis is SQL that dbt compiles but never materializes: ad hoc
+#     queries, quality reviews or investigations worth versioning, using
+#     ref()/source() so that no database or schema is hardcoded.
+#   - Name: <domain>__<description>, in one subfolder per domain.
+#   - If an analysis is queried regularly, it becomes a model; if it checks
+#     something that should never happen, it becomes a test.
+#   - Compile: dbt compile --select <name>   (or path:analyses/<domain>)
+#     Output in target/compiled/poc_dbt/analyses/<domain>/<name>.sql
+# =============================================================================
+version: 2
+
+analyses:
+  - name: business_entity_2__incremental_drift
+    description: >
+      Differences between the incremental fact
+      tb_slv_l1_business_entity_2__fact_table_3_partitioned and the full
+      recomputation of the source: records missing from the incremental table,
+      records that no longer exist in the source and different amounts.
+      If it returns rows often, the reprocessing window is too short.
+    config:
+      tags: ["business_entity_2"]
+    columns:
+      - name: source_database
+        description: Source database the record comes from.
+      - name: table_3_id
+        description: Identifier of table_3.
+      - name: event_date
+        description: Date of the record.
+      - name: source_amount
+        description: Amount in the full recomputation; NULL if missing there.
+      - name: incremental_amount
+        description: Amount in the incremental table; NULL if missing there.
+      - name: difference_type
+        description: "'missing_in_incremental', 'only_in_incremental' or 'different_amount'."
