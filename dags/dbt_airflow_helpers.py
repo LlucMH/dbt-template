@@ -4,18 +4,30 @@ with pytest in the CI (dags/tests/).
 They read dbt's artifacts (target/manifest.json, target/run_results.json) and the output
 of `dbt show`, so the DAGs work the same on every warehouse: dbt talks to the warehouse,
 the DAG only talks to dbt.
+
+The exposures are the scheduling contract (see the header of any _<use_case>__exposures.yml,
+checked by macros/validate_exposures.sql):
+  tags            one schedule: daily | weekly | monthly (shared DAG) or custom (own DAG)
+  meta.cron       custom only: cron expression (UTC)
+  meta.ready_by   "HH:MM" UTC by which the consumer needs the data
+  meta.notify     team alerted when something the exposure needs fails or is late
+  meta.criticality  low | medium | high
 """
 import json
-from collections import defaultdict
+from collections import defaultdict, deque
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Schedules the DAGs understand: exposure tag -> cron expression (UTC).
-# An exposure tagged with one of them gets its parents built by that DAG.
+# Shared schedules: tag -> cron expression (UTC). Every exposure with the tag is
+# built by the same DAG, poc_dbt__<schedule>.
 SCHEDULES = {
     "daily": "0 6 * * *",
     "weekly": "0 6 * * 1",
     "monthly": "0 7 1 * *",
 }
+CUSTOM = "custom"
+# Snapshots capture history once a day: only the daily DAG runs them.
+SNAPSHOT_SCHEDULE = "daily"
 
 FAILED_STATUSES = {"error", "fail", "runtime error"}
 
@@ -24,50 +36,162 @@ def load_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def schedules_in_use(manifest):
-    """Schedules that at least one enabled exposure is tagged with, in SCHEDULES order."""
-    tags = set()
-    for exposure in manifest.get("exposures", {}).values():
-        tags.update(exposure.get("tags", []))
-    return [schedule for schedule in SCHEDULES if schedule in tags]
+def _meta(node):
+    return (node.get("config") or {}).get("meta") or node.get("meta") or {}
 
 
-def failures_by_team(run_results, manifest):
-    """Failed nodes of a dbt run, grouped by the team in their meta.notify.
+def _exposure(exposure_id, exposure):
+    meta = _meta(exposure)
+    return {
+        "id": exposure_id,
+        "name": exposure["name"],
+        "notify": meta.get("notify", "data_platform"),
+        "criticality": meta.get("criticality", "medium"),
+        "ready_by": meta.get("ready_by"),
+        "consumer": meta.get("consumer"),
+        "depends_on": (exposure.get("depends_on") or {}).get("nodes", []),
+    }
 
-    Returns {team: [{"name", "status", "message", "criticality"}, ...]}. Nodes without
-    meta.notify (bronze, silver, tests on them...) go to the "data_platform" team.
-    A test is attributed to the team of the model it tests.
+
+def dag_specs(manifest):
+    """One spec per DAG to create, from the exposures of the manifest.
+
+    Shared schedules (daily, weekly, monthly) give one DAG for all their exposures,
+    selected by tag; every custom exposure gives its own DAG at its meta.cron,
+    selected by exposure. Alerts are the exposures with meta.consumer: alert.
+    """
+    exposures = manifest.get("exposures", {})
+    specs = []
+    for schedule, cron in SCHEDULES.items():
+        members = [_exposure(i, e) for i, e in exposures.items() if schedule in e.get("tags", [])]
+        if members:
+            specs.append({
+                "dag_id": f"poc_dbt__{schedule}",
+                "cron": cron,
+                "select": f"+tag:{schedule}",
+                "snapshot": schedule == SNAPSHOT_SCHEDULE,
+                "exposures": members,
+            })
+    for exposure_id, exposure in exposures.items():
+        if CUSTOM in exposure.get("tags", []):
+            member = _exposure(exposure_id, exposure)
+            specs.append({
+                "dag_id": f"poc_dbt__{member['name']}",
+                "cron": _meta(exposure)["cron"],
+                "select": f"+exposure:{member['name']}",
+                "snapshot": False,
+                "exposures": [member],
+            })
+    nodes = manifest.get("nodes", {})
+    for spec in specs:
+        spec["alerts"] = [
+            {"exposure": e, "model": nodes[e["depends_on"][0]]["name"]}
+            for e in spec["exposures"]
+            if e["consumer"] == "alert" and e["depends_on"] and e["depends_on"][0] in nodes
+        ]
+    return specs
+
+
+def exposures_affected_by(node_id, manifest):
+    """Ids of the exposures downstream of a node, following manifest.child_map.
+
+    A test is traced from the model it tests: if a test fails, every consumer of
+    that model is affected.
+    """
+    node = manifest.get("nodes", {}).get(node_id, {})
+    start = node.get("attached_node") or node_id
+    child_map = manifest.get("child_map", {})
+    seen, queue, affected = {start}, deque([start]), set()
+    while queue:
+        for child in child_map.get(queue.popleft(), []):
+            if child in seen:
+                continue
+            seen.add(child)
+            if child.startswith("exposure."):
+                affected.add(child)
+            else:
+                queue.append(child)
+    return affected
+
+
+def failures_by_team(run_results, manifest, exposures):
+    """Failed nodes of a dbt run, grouped by the team that must hear about them.
+
+    Each failure goes to the meta.notify of every exposure of this DAG it affects,
+    with that exposure's criticality. A failure that affects none of them goes to
+    the node's own meta.notify, or to "data_platform".
+    Returns {team: [{"name", "status", "message", "criticality", "exposures"}, ...]}.
     """
     nodes = manifest.get("nodes", {})
+    by_id = {e["id"]: e for e in exposures}
     by_team = defaultdict(list)
     for result in run_results.get("results", []):
         if str(result.get("status", "")).lower() not in FAILED_STATUSES:
             continue
-        node = nodes.get(result["unique_id"], {})
-        owner_node = nodes.get(node.get("attached_node") or "", node)
-        meta = (owner_node.get("config") or {}).get("meta") or owner_node.get("meta") or {}
-        by_team[meta.get("notify", "data_platform")].append({
-            "name": node.get("name", result["unique_id"]),
+        node_id = result["unique_id"]
+        node = nodes.get(node_id, {})
+        failure = {
+            "name": node.get("name", node_id),
             "status": result.get("status"),
             "message": (result.get("message") or "").strip(),
-            "criticality": meta.get("criticality", "medium"),
-        })
+        }
+        affected = [by_id[i] for i in sorted(exposures_affected_by(node_id, manifest)) if i in by_id]
+        if affected:
+            teams = defaultdict(list)
+            for exposure in affected:
+                teams[exposure["notify"]].append(exposure)
+            for team, team_exposures in teams.items():
+                critical = any(e["criticality"] == "high" for e in team_exposures)
+                by_team[team].append({**failure, "criticality": "high" if critical else team_exposures[0]["criticality"],
+                                      "exposures": [e["name"] for e in team_exposures]})
+        else:
+            owner = nodes.get(node.get("attached_node") or "", node)
+            by_team[_meta(owner).get("notify", "data_platform")].append(
+                {**failure, "criticality": _meta(owner).get("criticality", "medium"), "exposures": []})
     return dict(by_team)
 
 
-def failure_email(team, failures, schedule):
+def failure_email(team, failures, dag_id):
     """Subject and HTML body of the failure e-mail for one team."""
     critical = any(f["criticality"] == "high" for f in failures)
-    subject = f"{'[HIGH] ' if critical else ''}poc_dbt {schedule} run: {len(failures)} failed node(s) for {team}"
+    subject = f"{'[HIGH] ' if critical else ''}{dag_id}: {len(failures)} failed node(s) for {team}"
     rows = "".join(
-        f"<tr><td>{f['name']}</td><td>{f['status']}</td><td>{f['criticality']}</td><td>{f['message']}</td></tr>"
+        f"<tr><td>{f['name']}</td><td>{f['status']}</td><td>{', '.join(f['exposures']) or '-'}</td>"
+        f"<td>{f['criticality']}</td><td>{f['message']}</td></tr>"
         for f in failures
     )
     body = (
-        f"<p>The {schedule} dbt run finished with failures owned by <b>{team}</b>.</p>"
-        "<table border='1' cellpadding='4'><tr><th>Node</th><th>Status</th><th>Criticality</th><th>Message</th></tr>"
-        f"{rows}</table>"
+        f"<p>{dag_id} finished with failures that concern <b>{team}</b>.</p>"
+        "<table border='1' cellpadding='4'><tr><th>Node</th><th>Status</th><th>Affected exposures</th>"
+        f"<th>Criticality</th><th>Message</th></tr>{rows}</table>"
+    )
+    return subject, body
+
+
+def ready_by_deadline(run_date, ready_by):
+    """UTC datetime by which an exposure's data must be ready on a run date."""
+    hours, minutes = (int(part) for part in ready_by.split(":"))
+    return datetime(run_date.year, run_date.month, run_date.day, hours, minutes, tzinfo=timezone.utc)
+
+
+def late_exposures(exposures, run_date, finished_at):
+    """Exposures whose ready_by on run_date passed before the run finished (finished_at, UTC)."""
+    return [
+        e for e in exposures
+        if e["ready_by"] and finished_at > ready_by_deadline(run_date, e["ready_by"])
+    ]
+
+
+def late_email(team, exposures, dag_id, finished_at):
+    """Subject and HTML body of the late-data e-mail for one team."""
+    critical = any(e["criticality"] == "high" for e in exposures)
+    names = ", ".join(e["name"] for e in exposures)
+    subject = f"{'[HIGH] ' if critical else ''}{dag_id}: data late for {names}"
+    rows = "".join(f"<tr><td>{e['name']}</td><td>{e['ready_by']} UTC</td></tr>" for e in exposures)
+    body = (
+        f"<p>{dag_id} finished at {finished_at:%H:%M} UTC, after the time these consumers need "
+        f"their data by (owned by <b>{team}</b>).</p>"
+        f"<table border='1' cellpadding='4'><tr><th>Exposure</th><th>Ready by</th></tr>{rows}</table>"
     )
     return subject, body
 
@@ -85,17 +209,17 @@ def parse_dbt_show_json(output):
     return []
 
 
-def anomaly_email(rows):
-    """Subject and HTML body of the anomaly alert, or None when there is nothing to report."""
+def alert_email(exposure, rows):
+    """Subject and HTML body of an alert exposure, or None when there is nothing to report."""
     if not rows:
         return None
     columns = list(rows[0].keys())
     header = "".join(f"<th>{column}</th>" for column in columns)
     lines = "".join("<tr>" + "".join(f"<td>{row.get(c)}</td>" for c in columns) + "</tr>" for row in rows)
-    subject = f"poc_dbt: {len(rows)} amount anomaly(ies) on {rows[0].get('event_date')}"
+    prefix = "[HIGH] " if exposure["criticality"] == "high" else ""
+    subject = f"{prefix}{exposure['name']}: {len(rows)} row(s) to review"
     body = (
-        "<p>The latest loaded day has amounts far from their usual level "
-        "(more than 3 standard deviations from the previous 7 days).</p>"
+        f"<p>The alert <b>{exposure['name']}</b> has rows to review.</p>"
         f"<table border='1' cellpadding='4'><tr>{header}</tr>{lines}</table>"
     )
     return subject, body

@@ -9,7 +9,7 @@
 #
 # Steps:
 #   1. Style: SQLFluff on the SQL, pytest on the Airflow DAG helpers.
-#   2. Rules: naming convention and documentation rules (run-operations).
+#   2. Rules: naming, documentation and exposure orchestration rules (run-operations).
 #   3. Data: test landing tables, then a full dbt build (unit tests, models,
 #      data tests, snapshots, seeds). The incremental model is first created
 #      empty, because its unit test reads the existing table ({{ this }}).
@@ -35,6 +35,7 @@ echo "== 2. Rules"
 dbt deps
 dbt run-operation validate_model_naming
 dbt run-operation validate_model_documentation
+dbt run-operation validate_exposures
 
 echo "== 3. Data"
 dbt run-operation load_ci_landing_data

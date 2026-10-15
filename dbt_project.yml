@@ -193,7 +193,9 @@ models:
         dbt_project: poc_dbt
         layer: gold
 
-      # Metadata read by Airflow from manifest.json.
+      # Metadata read by Airflow from manifest.json: who owns the use case and whom
+      # to alert when one of its models fails and no exposure is affected. WHEN to
+      # run is not here: it is the schedule of each exposure (_<use_case>__exposures.yml).
       # owner/notify: team identifiers, never real email addresses here.
       use_case_1:
         +tags: use_case_1
@@ -207,7 +209,6 @@ models:
           use_case: use_case_1
           owner: team_use_case_1
           criticality: medium      # low | medium | high
-          schedule: daily          # daily | weekly | monthly | custom
           notify: team_use_case_1
 
       use_case_2:
@@ -222,7 +223,6 @@ models:
           use_case: use_case_2
           owner: team_use_case_2
           criticality: medium
-          schedule: daily
           notify: team_use_case_2
 
 # -----------------------------------------------------------------------------

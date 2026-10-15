@@ -3,14 +3,25 @@
 #
 # Template conventions:
 #   - One exposures file per use case, next to its models YAML.
-#   - One exposure per real consumer (dashboard, file, application),
+#   - One exposure per real consumer (dashboard, file, application, alert),
 #     consistent with meta.consumer of the models it reads.
-#   - tags: the use case and how often the exposure must be refreshed
-#     (daily | weekly | monthly). Airflow builds everything the exposures need with:
-#       dbt build --select +tag:daily                       (every daily exposure)
-#       dbt build --select "+tag:use_case_2,+tag:monthly"   (one use case and schedule)
 #   - owner: team identifier, never real email addresses.
 #   - url: fill in with the consumer's real link when it exists.
+#
+# Orchestration: every exposure is also the scheduling contract of its consumer,
+# read by the Airflow DAGs (dags/poc_dbt_dags.py) and checked by
+# macros/validate_exposures.sql:
+#   tags            the use case and EXACTLY ONE schedule:
+#                     daily | weekly | monthly   shared DAG poc_dbt__<schedule>
+#                                                (dbt build --select +tag:<schedule>)
+#                     custom                     own DAG poc_dbt__<exposure>, at meta.cron
+#                                                (dbt build --select +exposure:<name>)
+#   meta.cron       only with custom: cron expression in UTC. "2#3" = third Tuesday;
+#                   never "15-21 * 2", which cron reads as "days 15-21 OR Tuesdays".
+#   meta.ready_by   "HH:MM" UTC: the consumer needs the data by then. A run that
+#                   finishes later e-mails meta.notify that the data is late.
+#   meta.notify     team alerted when something this exposure needs fails or is late.
+#   meta.criticality  low | medium | high: "[HIGH]" in the subject of its alerts.
 # =============================================================================
 version: 2
 
@@ -33,4 +44,6 @@ exposures:
       meta:
         use_case: use_case_1
         consumer: bi
-        schedule: daily
+        ready_by: "08:00"
+        notify: team_use_case_1
+        criticality: medium

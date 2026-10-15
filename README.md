@@ -228,8 +228,8 @@ For logic that is awkward in portable SQL (statistics, forecasting, ML), a model
 | Data tests | Models YAML: dbt built-ins, `dbt_utils`, `dbt_checks.*` | **Data**: keys, relationships, ranges, ratios, freshness of dates, non-empty gold |
 | Generic tests | `tests/generic/` | Reusable checks a package does not provide (e.g. `no_date_gaps`) |
 | Singular tests | `tests/<layer>/` | Reconciliations between layers and between reports |
-| Rules | `validate_model_naming`, `validate_model_documentation` | Naming, layers, name length; descriptions, primary keys, `_dbt_run_at`, `python` tag |
-| DAG helpers | `dags/tests/` (pytest) | Failure routing, e-mail content, `dbt show` parsing |
+| Rules | `validate_model_naming`, `validate_model_documentation`, `validate_exposures` | Naming, layers, name length; descriptions, primary keys, `_dbt_run_at`, `python` tag; the scheduling contract of the exposures |
+| DAG helpers | `dags/tests/` (pytest) | DAGs per schedule, failure routing through the lineage, `ready_by`, alerts, `dbt show` parsing |
 
 All of them run in [scripts/ci_test.sh](scripts/ci_test.sh). Unit tests of incremental models
 read the existing table (`this`), so on an empty database the incremental model is first
@@ -253,29 +253,48 @@ created with `dbt run --empty`.
 | `brz`, `slv`, `gld` | Every model of each layer | `dbt build --select tag:slv` |
 | `<source_database>`, `<business_entity>`, `<use_case>` | Every model, seed and snapshot of each domain | `dbt build --select tag:use_case_1` |
 | `seed`, `snapshot`, `python` | Every seed / snapshot / Python model | `dbt build --exclude tag:python` |
-| `<use_case>` + `daily` / `weekly` / `monthly` | Exposures: use case and how often it must be refreshed | `dbt build --select +tag:daily` |
+| `<use_case>` + `daily` / `weekly` / `monthly` / `custom` | Exposures: use case and schedule (see *Orchestration*) | `dbt build --select +tag:daily` |
 
 To build everything the exposures of one use case and schedule need:
 
 ```bash
-dbt build --select "+tag:use_case_2,+tag:monthly"
+dbt build --select "+tag:use_case_1,+tag:daily"
 ```
+
+A `custom` exposure is built on its own: `dbt build --select +exposure:<name>`.
 
 ## Orchestration
 
-[dags/poc_dbt_dags.py](dags/poc_dbt_dags.py) creates one Airflow DAG per schedule used by the
-exposures (`poc_dbt__daily`, `poc_dbt__monthly`...), from the deployed `target/manifest.json`:
+The **exposures are the scheduling contract**: each consumer declares when it needs its
+data, and [dags/poc_dbt_dags.py](dags/poc_dbt_dags.py) turns that into Airflow DAGs from the
+deployed `target/manifest.json`. [macros/validate_exposures.sql](macros/validate_exposures.sql)
+checks the contract in the CI.
+
+| Exposure config | Meaning |
+|---|---|
+| tag `daily` / `weekly` / `monthly` | Shared DAG `poc_dbt__<schedule>` (06:00 UTC daily, Mondays, day 1), building `+tag:<schedule>` |
+| tag `custom` + `meta.cron` | Own DAG `poc_dbt__<exposure>` at that cron (UTC), building `+exposure:<name>` |
+| `meta.ready_by` | `"HH:MM"` UTC by which the consumer needs the data: a later finish e-mails `notify` |
+| `meta.notify`, `meta.criticality` | Team alerted when something the exposure needs fails or is late; `[HIGH]` subject when `high` |
+| `meta.consumer: alert` | The DAG sends the rows of the model it reads, only when there are any |
+
+Example: the monthly dashboard of `use_case_2` is reviewed on the third Tuesday of every
+month, so it is `custom` with `cron: "0 6 * * 2#3"`. Never `0 6 15-21 * 2`: cron reads a day
+of the month and a day of the week together as "OR", so that would run every day from the
+15th to the 21st *and* every Tuesday.
+
+Every DAG runs:
 
 ```
-prepare -> source_freshness -> [snapshot, daily only] -> build (+tag:<schedule>) -> notify_failures
-                                                                                -> send_anomaly_alert (daily)
+prepare -> source_freshness -> [snapshot, daily only] -> build -> notify_failures
+                                                               -> check_ready_by
+                                                               -> alert__<exposure> (alert exposures)
 ```
 
 - **source_freshness**: a source past its `error_after` stops the DAG before building on stale data.
-- **notify_failures**: e-mails each team (`meta.notify`) the nodes it owns that failed, from
-  `run_results.json`; `[HIGH]` in the subject when one of them is `criticality: high`.
-- **send_anomaly_alert**: e-mails the rows of `vw_gld_l0_use_case_2__amount_anomaly_alerts`,
-  only when it returns rows. dbt prepares *what* to send; Airflow sends it.
+- **notify_failures**: each failed node is traced through the lineage to the exposures of the
+  DAG it affects, and their `notify` teams get it with the exposure's criticality. A failure in
+  silver that breaks a `high` export reaches the export's team as `[HIGH]`.
 - **Recipients**: Airflow Variable `dbt_notify_recipients`, JSON `{team: [e-mails]}`. E-mail
   addresses never live in the repository.
 - **Composer environment**: `DBT_ADAPTER`, `DBT_TARGET=prod` and the warehouse connection
@@ -293,6 +312,7 @@ dbt build --select +tag:daily              # everything the daily exposures need
 dbt test --select test_type:unit           # unit tests only
 dbt run-operation validate_model_naming    # naming rules, without running anything
 dbt run-operation validate_model_documentation   # documentation rules
+dbt run-operation validate_exposures       # scheduling contract of the exposures
 sqlfluff lint models analyses tests        # SQL style (ansi dialect)
 dbt compile --select <analysis>            # compile an analysis (SQL in target/compiled/)
 dbt snapshot                               # update snapshots (never --full-refresh in ideacion/prod)
@@ -322,6 +342,7 @@ BigQuery, its connection variables must reach the steps that talk to it (ideally
 | Python model (silver) | `tb_slv_l3_business_entity_2__agg_table_3_daily_anomalies` | Anomaly flag with a rolling z-score over 7 calendar days (pandas) |
 | Python model (gold) | `tb_gld_l2_use_case_2__monthly_amount_forecast` | Actual months plus a 3-month linear-trend forecast (numpy), without contract |
 | Alert | `vw_gld_l0_use_case_2__amount_anomaly_alerts` + exposure + DAG task | dbt prepares the alert, Airflow sends it only when there is something to report |
+| Custom schedule | `use_case_2__monthly_amount_dashboard` | Own DAG on the third Tuesday of every month (`0 6 * * 2#3`) |
 | Unit tests | `_<domain>__unit_tests.yml` | Latest load wins, unmapped values, aggregation by group, incremental window (`this` + `is_incremental`) |
 | Singular tests | `tests/silver/...daily_agg_matches_fact`, `tests/gold/...monthly_matches_daily` | Reconciliation between layers and between reports |
 | Generic test | `tests/generic/no_date_gaps.sql` | Reusable test applied from the YAML |

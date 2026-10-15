@@ -90,9 +90,12 @@ EXPOSURES = """# ===============================================================
 # Exposures of {name}
 #
 # Template conventions: see models/gold/use_case_1/_use_case_1__exposures.yml.
-#   - One exposure per real consumer (dashboard, file, application).
-#   - tags: the use case and how often it must be refreshed (daily | weekly | monthly):
-#     the Airflow DAGs (dags/) build everything the exposures of each schedule need.
+#   - One exposure per real consumer (dashboard, file, application, alert).
+#   - Orchestration contract, read by the Airflow DAGs (dags/) and checked by
+#     macros/validate_exposures.sql:
+#       tags: the use case and ONE schedule: daily | weekly | monthly | custom
+#       meta.cron: custom only (UTC; "2#3" = third Tuesday)
+#       meta.ready_by ("HH:MM" UTC), meta.notify (team), meta.criticality (low | medium | high)
 #   - owner: team identifier, never real email addresses.
 # =============================================================================
 version: 2
@@ -108,10 +111,12 @@ exposures: []
 #   depends_on:
 #     - ref('<gold model>')
 #   config:
-#     tags: ["{name}", "daily"]
+#     tags: ["{name}", "daily"]          # or "custom" + meta.cron
 #     meta:
 #       use_case: {name}
-#       schedule: daily
+#       ready_by: "08:00"
+#       notify: {owner}
+#       criticality: medium
 """
 
 PROJECT_BLOCK = {
@@ -137,7 +142,6 @@ PROJECT_BLOCK = {
           use_case: {name}
           owner: {owner}
           criticality: medium      # low | medium | high
-          schedule: daily          # daily | weekly | monthly | custom
           notify: {owner}
 """,
 }
