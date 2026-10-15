@@ -1,4 +1,17 @@
+# =============================================================================
+# dbt packages of poc_dbt. Install with: dbt deps (versions locked in package-lock.yml).
+#
+# Rule for adding a package: it must work on every supported warehouse (or be a
+# development-only tool) and must not overlap with one already installed: two
+# packages for the same job mean two ways of writing the same test.
+#
+# The commented packages below are candidates for the future. To enable one,
+# uncomment it, run dbt deps and the CI suite (bash scripts/ci_test.sh).
+# Latest versions checked on dbt Hub on 2026-10-16, all compatible with dbt 1.11.
+# =============================================================================
 packages:
+  # --------------------------------------------------------------- In use
+  # Generic macros and tests (unique_combination_of_columns, accepted_range...).
   - package: dbt-labs/dbt_utils
     version: [">=1.3.0", "<2.0.0"]
 
@@ -7,3 +20,52 @@ packages:
   # Used as dbt_checks.<test> in the models YAML. Pinned to a release tag.
   - git: "https://github.com/LlucMH/dbt-checks.git"
     revision: v0.8.4
+
+  # ---------------------------------------------------- Project governance
+  # Reviews the whole project: models without tests or docs, fan-outs, sources read
+  # from late layers, test and documentation coverage. Run it in the CI.
+  # BEFORE enabling: its naming rules expect stg_/int_/fct_ prefixes; configure its
+  # vars for the brz/slv/gld convention or disable fct_model_naming_conventions,
+  # otherwise it fails on every model.
+  # - package: dbt-labs/dbt_project_evaluator
+  #   version: [">=1.4.1", "<2.0.0"]
+
+  # ------------------------------------------------------ Development tools
+  # Generates sources and models YAML with every column, read from the warehouse.
+  # Complements scripts/new_domain.py: the script creates the structure, codegen fills
+  # in the real columns (dbt run-operation generate_source / generate_model_yaml).
+  # - package: dbt-labs/codegen
+  #   version: [">=0.14.1", "<0.15.0"]
+
+  # Compares two relations row by row and column by column: proves that a refactored
+  # or migrated model returns the same data as the old one before switching consumers.
+  # - package: dbt-labs/audit_helper
+  #   version: [">=0.14.0", "<0.15.0"]
+
+  # -------------------------------------------------------- Modelling helpers
+  # Date dimension and calendar functions (fiscal periods, ISO weeks, time zones).
+  # Only for a real dim_date: a plain date series is already dbt_utils.date_spine.
+  # - package: godatadriven/dbt_date
+  #   version: [">=0.21.0", "<0.22.0"]
+
+  # External tables over files in GCS / S3 (BigQuery BigLake, Snowflake, Databricks,
+  # Redshift Spectrum), when a source is files instead of a landing table.
+  # - package: dbt-labs/dbt_external_tables
+  #   version: [">=0.12.4", "<0.13.0"]
+
+  # ------------------------------------------- Observability (choose ONE of the two)
+  # Test results history, volume / freshness anomaly detection and a monitoring report.
+  # Heavy: creates its own tables and adds on-run-end hooks. Replaces dbt_artifacts.
+  # - package: elementary-data/elementary
+  #   version: [">=0.26.1", "<0.27.0"]
+
+  # Lighter alternative: only stores the results of every run in the warehouse.
+  # - package: brooklyn-data/dbt_artifacts
+  #   version: [">=2.11.1", "<3.0.0"]
+
+  # ----------------------------------------------------------- Not recommended
+  # dbt_expectations overlaps almost completely with dbt_checks (ranges, ratios, regex,
+  # dates): keep a single vocabulary for data tests. Listed only for reference
+  # (maintained by Metaplane since the original calogica project was archived).
+  # - package: metaplane/dbt_expectations
+  #   version: [">=0.10.10", "<0.11.0"]
