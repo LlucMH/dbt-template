@@ -15,7 +15,6 @@ checked by macros/validate_exposures.sql):
 """
 import json
 from collections import defaultdict, deque
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Shared schedules: tag -> cron expression (UTC). Every exposure with the tag is
@@ -168,30 +167,27 @@ def failure_email(team, failures, dag_id):
     return subject, body
 
 
-def ready_by_deadline(run_date, ready_by):
-    """UTC datetime by which an exposure's data must be ready on a run date."""
-    hours, minutes = (int(part) for part in ready_by.split(":"))
-    return datetime(run_date.year, run_date.month, run_date.day, hours, minutes, tzinfo=timezone.utc)
+def ready_by_groups(exposures):
+    """Exposures with a ready_by, grouped by it and sorted: [(ready_by, [exposures]), ...].
+
+    The DAG creates one deadline check per distinct ready_by.
+    """
+    groups = defaultdict(list)
+    for exposure in exposures:
+        if exposure["ready_by"]:
+            groups[exposure["ready_by"]].append(exposure)
+    return sorted(groups.items())
 
 
-def late_exposures(exposures, run_date, finished_at):
-    """Exposures whose ready_by on run_date passed before the run finished (finished_at, UTC)."""
-    return [
-        e for e in exposures
-        if e["ready_by"] and finished_at > ready_by_deadline(run_date, e["ready_by"])
-    ]
-
-
-def late_email(team, exposures, dag_id, finished_at):
-    """Subject and HTML body of the late-data e-mail for one team."""
+def not_ready_email(team, exposures, dag_id, ready_by, build_state):
+    """Subject and HTML body of the e-mail sent when the data is not ready by ready_by (UTC)."""
     critical = any(e["criticality"] == "high" for e in exposures)
     names = ", ".join(e["name"] for e in exposures)
-    subject = f"{'[HIGH] ' if critical else ''}{dag_id}: data late for {names}"
-    rows = "".join(f"<tr><td>{e['name']}</td><td>{e['ready_by']} UTC</td></tr>" for e in exposures)
+    subject = f"{'[HIGH] ' if critical else ''}{dag_id}: data not ready by {ready_by} UTC for {names}"
     body = (
-        f"<p>{dag_id} finished at {finished_at:%H:%M} UTC, after the time these consumers need "
-        f"their data by (owned by <b>{team}</b>).</p>"
-        f"<table border='1' cellpadding='4'><tr><th>Exposure</th><th>Ready by</th></tr>{rows}</table>"
+        f"<p>At {ready_by} UTC the dbt build of {dag_id} was <b>{build_state or 'not started'}</b>, "
+        f"so these consumers (owned by <b>{team}</b>) do not have their data yet:</p>"
+        "<ul>" + "".join(f"<li>{e['name']}</li>" for e in exposures) + "</ul>"
     )
     return subject, body
 

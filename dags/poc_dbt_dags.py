@@ -14,25 +14,36 @@ Every DAG runs:
   3. build             dbt build of everything its exposures need.
   4. notify_failures   always: e-mails the meta.notify team of every exposure affected by
                        a failed node (following the lineage), with its criticality.
-  5. check_ready_by    always: e-mails the meta.notify team of every exposure whose
-                       meta.ready_by (UTC) passed before the run finished.
-  6. alert__<exposure> for exposures with meta.consumer: alert: e-mails the rows of the
+  5. alert__<exposure> for exposures with meta.consumer: alert: e-mails the rows of the
                        model they read, only when it returns rows.
+
+and, independently of the build, one deadline check per distinct meta.ready_by:
+
+  wait_until_<HHMM> -> check_ready_by_<HHMM>
+                       the sensor waits (in reschedule mode: no worker slot held) until
+                       ready_by (UTC) of the run date; then, if the build has not succeeded
+                       (still running, failed, or never started), the exposures' teams are
+                       told their data is not ready. A hung or late DAG is reported too.
 
 dbt prepares the data; this DAG decides when to run it and whom to tell. Warehouse-agnostic:
 the DAG only calls dbt and reads its artifacts.
 
+Airflow 2 and 3: imports, Variable.get and e-mail sending go through the small compatibility
+layer below. E-mails use airflow.utils.email when it exists (Airflow 2: Composer's configured
+backend) and otherwise the SMTP provider (connection DBT_SMTP_CONN_ID, default smtp_default).
+
 Environment (Composer environment variables): DBT_ADAPTER, DBT_TARGET (prod) and the
 connection variables of the warehouse (see .env.example). Optional: DBT_BIN (dbt executable,
-e.g. a dedicated virtualenv, to keep dbt's dependencies apart from Airflow's) and
-DBT_RUNS_DIR (where each run writes its artifacts; must be shared by every worker).
+e.g. a dedicated virtualenv, to keep dbt's dependencies apart from Airflow's), DBT_RUNS_DIR
+(where each run writes its artifacts; must be shared by every worker) and DBT_SMTP_CONN_ID.
 Airflow Variable dbt_notify_recipients: JSON {team: [e-mails]}, e.g.
 {"team_use_case_2": ["uc2@company.com"], "data_platform": ["data@company.com"]}.
 """
+import inspect
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -42,31 +53,66 @@ from dbt_airflow_helpers import (  # noqa: E402
     dag_specs,
     failure_email,
     failures_by_team,
-    late_email,
-    late_exposures,
     load_json,
+    not_ready_email,
     parse_dbt_show_json,
+    ready_by_groups,
     recipients,
 )
 
-from airflow import DAG  # noqa: E402
-from airflow.models import Variable  # noqa: E402
-
+# ------------------------------------------------------------------ Airflow 2 / 3 compatibility
 try:  # Airflow 3
+    from airflow.sdk import DAG, Variable
     from airflow.providers.standard.operators.bash import BashOperator
     from airflow.providers.standard.operators.python import PythonOperator
+    from airflow.providers.standard.sensors.date_time import DateTimeSensor
 except ImportError:  # Airflow 2
+    from airflow import DAG
+    from airflow.models import Variable
     from airflow.operators.bash import BashOperator
     from airflow.operators.python import PythonOperator
+    from airflow.sensors.date_time import DateTimeSensor
 
-from airflow.utils.email import send_email  # noqa: E402
+try:  # Airflow 2 (and Airflow 3 while it still ships it)
+    from airflow.utils.email import send_email as _airflow_send_email
+except ImportError:
+    _airflow_send_email = None
 
+
+def get_variable(key, default):
+    """Variable.get with a default: the argument is default_var in Airflow 2, default in Airflow 3."""
+    default_arg = "default" if "default" in inspect.signature(Variable.get).parameters else "default_var"
+    return Variable.get(key, deserialize_json=True, **{default_arg: default})
+
+
+def send_email(to, subject, html_content):
+    if _airflow_send_email is not None:
+        _airflow_send_email(to=to, subject=subject, html_content=html_content)
+        return
+    from airflow.providers.smtp.hooks.smtp import SmtpHook
+    with SmtpHook(smtp_conn_id=os.environ.get("DBT_SMTP_CONN_ID", "smtp_default")) as hook:
+        hook.send_email_smtp(to=to, subject=subject, html_content=html_content)
+
+
+def task_state(context, task_id):
+    """State of another task of the same DAG run (Airflow 3: Task SDK; Airflow 2: metadata DB)."""
+    ti = context["ti"]
+    if hasattr(ti, "get_task_states"):
+        states = ti.get_task_states(dag_id=ti.dag_id, task_ids=[task_id], run_ids=[ti.run_id])
+        return (states.get(ti.run_id) or {}).get(task_id)
+    return context["dag_run"].get_task_instance(task_id).state
+
+
+# ------------------------------------------------------------------ configuration
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = PROJECT_DIR / "target" / "manifest.json"
 
 DBT_BIN = os.environ.get("DBT_BIN", "dbt")
 # Composer: /home/airflow/gcs/data is shared by every worker (unlike /tmp).
 RUNS_DIR = os.environ.get("DBT_RUNS_DIR", "/home/airflow/gcs/data/dbt_runs")
+# Date of the run, in templates: the data interval end (Airflow 2 and scheduled Airflow 3
+# runs), the logical date, or, for a manual Airflow 3 run without one, when it was triggered.
+RUN_DATE = "(data_interval_end or logical_date or dag_run.run_after).strftime('%Y-%m-%d')"
 
 DEFAULT_ARGS = {
     "owner": "data_platform",
@@ -80,12 +126,12 @@ def run_dir(context):
     return f"{RUNS_DIR}/{context['dag'].dag_id}/{context['run_id']}".replace(":", "_")
 
 
-def dbt_env(target_subdir="target"):
+def dbt_env():
     return {
         **os.environ,
         "DBT_PROFILES_DIR": str(PROJECT_DIR),
         "DBT_TARGET": os.environ.get("DBT_TARGET", "prod"),
-        "DBT_TARGET_PATH": "{{ ti.xcom_pull(task_ids='prepare') }}/" + target_subdir,
+        "DBT_TARGET_PATH": "{{ ti.xcom_pull(task_ids='prepare') }}/target",
         "DBT_LOG_PATH": "{{ ti.xcom_pull(task_ids='prepare') }}/logs",
     }
 
@@ -101,9 +147,10 @@ def dbt_task(task_id, command, **kwargs):
 
 
 def notify_map():
-    return Variable.get("dbt_notify_recipients", default_var={}, deserialize_json=True)
+    return get_variable("dbt_notify_recipients", {})
 
 
+# ------------------------------------------------------------------ task callables
 def prepare(**context):
     path = run_dir(context)
     Path(path).mkdir(parents=True, exist_ok=True)
@@ -123,16 +170,16 @@ def notify_failures(spec, **context):
             send_email(to=to, subject=subject, html_content=body)
 
 
-def check_ready_by(spec, **context):
-    finished_at = datetime.now(timezone.utc)
-    run_date = context["data_interval_end"].date()
-    late = late_exposures(spec["exposures"], run_date, finished_at)
+def check_ready_by(spec, ready_by, exposures, **context):
+    build_state = task_state(context, "build")
+    if build_state == "success":
+        return  # the data was ready in time
     teams = notify_map()
-    for team in sorted({e["notify"] for e in late}):
-        team_late = [e for e in late if e["notify"] == team]
+    for team in sorted({e["notify"] for e in exposures}):
         to = recipients(team, teams)
         if to:
-            subject, body = late_email(team, team_late, spec["dag_id"], finished_at)
+            team_exposures = [e for e in exposures if e["notify"] == team]
+            subject, body = not_ready_email(team, team_exposures, spec["dag_id"], ready_by, build_state)
             send_email(to=to, subject=subject, html_content=body)
 
 
@@ -160,6 +207,7 @@ def send_alert(alert, **context):
         send_email(to=to, subject=email[0], html_content=email[1])
 
 
+# ------------------------------------------------------------------ DAGs
 def build_dag(spec):
     with DAG(
         dag_id=spec["dag_id"],
@@ -176,19 +224,30 @@ def build_dag(spec):
         build = dbt_task("build", f"build --select {spec['select']} --exclude resource_type:snapshot")
         notify = PythonOperator(task_id="notify_failures", python_callable=notify_failures,
                                 op_kwargs={"spec": spec}, trigger_rule="all_done")
-        ready = PythonOperator(task_id="check_ready_by", python_callable=check_ready_by,
-                               op_kwargs={"spec": spec}, trigger_rule="all_done")
 
         if spec["snapshot"]:
             snapshot = dbt_task("snapshot", "snapshot")
             prepare_task >> freshness >> snapshot >> build
         else:
             prepare_task >> freshness >> build
-        build >> [notify, ready]
+        build >> notify
 
         for alert in spec["alerts"]:
             build >> PythonOperator(task_id=f"alert__{alert['exposure']['name']}", python_callable=send_alert,
                                     op_kwargs={"alert": alert})
+
+        # Deadline checks: independent of the build, so a hung or late run is reported too.
+        for ready_by, exposures in ready_by_groups(spec["exposures"]):
+            hhmm = ready_by.replace(":", "")
+            wait = DateTimeSensor(
+                task_id=f"wait_until_{hhmm}",
+                target_time="{{ " + RUN_DATE + " }}" + f"T{ready_by}:00+00:00",
+                mode="reschedule",
+                poke_interval=300,
+            )
+            check = PythonOperator(task_id=f"check_ready_by_{hhmm}", python_callable=check_ready_by,
+                                   op_kwargs={"spec": spec, "ready_by": ready_by, "exposures": exposures})
+            wait >> check
     return dag
 
 

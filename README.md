@@ -274,7 +274,7 @@ checks the contract in the CI.
 |---|---|
 | tag `daily` / `weekly` / `monthly` | Shared DAG `poc_dbt__<schedule>` (06:00 UTC daily, Mondays, day 1), building `+tag:<schedule>` |
 | tag `custom` + `meta.cron` | Own DAG `poc_dbt__<exposure>` at that cron (UTC), building `+exposure:<name>` |
-| `meta.ready_by` | `"HH:MM"` UTC by which the consumer needs the data: a later finish e-mails `notify` |
+| `meta.ready_by` | `"HH:MM"` UTC by which the consumer needs the data: if the build has not succeeded by then, `notify` is told |
 | `meta.notify`, `meta.criticality` | Team alerted when something the exposure needs fails or is late; `[HIGH]` subject when `high` |
 | `meta.consumer: alert` | The DAG sends the rows of the model it reads, only when there are any |
 
@@ -287,19 +287,28 @@ Every DAG runs:
 
 ```
 prepare -> source_freshness -> [snapshot, daily only] -> build -> notify_failures
-                                                               -> check_ready_by
                                                                -> alert__<exposure> (alert exposures)
+
+wait_until_<HHMM> -> check_ready_by_<HHMM>        (one pair per distinct ready_by, independent of the build)
 ```
 
 - **source_freshness**: a source past its `error_after` stops the DAG before building on stale data.
 - **notify_failures**: each failed node is traced through the lineage to the exposures of the
   DAG it affects, and their `notify` teams get it with the exposure's criticality. A failure in
   silver that breaks a `high` export reaches the export's team as `[HIGH]`.
+- **check_ready_by**: a sensor waits until each `ready_by` of the run date without holding a
+  worker slot (reschedule mode); if the build has not succeeded by then (still running,
+  failed or never started), the exposures' teams are told their data is not ready. Because
+  it does not wait for the build, a hung or late DAG is reported too.
+- **Airflow 2 and 3**: imports, `Variable.get` and e-mails go through a small compatibility
+  layer. E-mails use `airflow.utils.email` when it exists (Composer's configured backend) and
+  otherwise the SMTP provider (connection `DBT_SMTP_CONN_ID`, default `smtp_default`).
 - **Recipients**: Airflow Variable `dbt_notify_recipients`, JSON `{team: [e-mails]}`. E-mail
   addresses never live in the repository.
 - **Composer environment**: `DBT_ADAPTER`, `DBT_TARGET=prod` and the warehouse connection
   variables. Optional `DBT_BIN` (dbt in a dedicated virtualenv, to keep its dependencies apart
-  from Airflow's) and `DBT_RUNS_DIR` (artifacts of each run, shared by every worker).
+  from Airflow's), `DBT_RUNS_DIR` (artifacts of each run, shared by every worker) and
+  `DBT_SMTP_CONN_ID`.
 
 [.airflowignore](.airflowignore) keeps Airflow away from everything but `dags/`.
 
@@ -317,6 +326,7 @@ sqlfluff lint models analyses tests        # SQL style (ansi dialect)
 dbt compile --select <analysis>            # compile an analysis (SQL in target/compiled/)
 dbt snapshot                               # update snapshots (never --full-refresh in ideacion/prod)
 bash scripts/ci_test.sh                    # the whole CI suite on DuckDB
+dbt run-operation drop_pr_schemas          # list the slim CI schemas (_pr_<n>); add --args '{dry_run: false}' to drop
 ```
 
 ## CI/CD
@@ -325,6 +335,11 @@ bash scripts/ci_test.sh                    # the whole CI suite on DuckDB
 |---|---|---|
 | [cloudbuild-pr.yaml](cloudbuild-pr.yaml) | Pull request to `main` | `ci_test.sh` on DuckDB; optional **slim CI** (`_SLIM_CI=true`): `dbt build --select state:modified+ --defer` on the real warehouse, in schemas suffixed `_pr_<n>`, against the last deployed manifest |
 | [cloudbuild.yaml](cloudbuild.yaml) | Push to `main` | `ci_test.sh`; manifest with the deployment target; docs (`dbt docs generate --static`, if `_DBT_DOCS_BUCKET` is set); deploy to `gs://<_DBT_GCS_BUCKET>/<_DBT_GCS_PATH>`; publish the manifest for the next slim CI and the docs page |
+
+The slim CI schemas (`_pr_<n>`) are not dropped automatically: run
+`dbt run-operation drop_pr_schemas --args '{dry_run: false}'` periodically with the target the
+pull requests build on (it refuses to run on `ideacion` or `prod`, and only touches schemas
+ending in `_pr_<number>`).
 
 The deployment **deletes from the bucket** whatever no longer exists in the project. Warehouse,
 target, buckets, paths and region are trigger substitutions. For a warehouse other than
@@ -350,6 +365,12 @@ BigQuery, its connection variables must reach the steps that talk to it (ideally
 | Analysis | `business_entity_1__table_2_change_history` | Changes per day from the SCD2, to size the snapshot frequency |
 | Analysis | `business_entity_2__incremental_drift` | Records the incremental table missed (late arrivals outside the window) |
 
+## Versions
+
+The template follows [Semantic Versioning](https://semver.org); every release is a git tag
+(`v1.0.0`...) described in [CHANGELOG.md](CHANGELOG.md). A project created from the template
+should note the version it started from, to know what changed since.
+
 ## To do
 
 - Mark the GitHub repository as a *Template repository* (Settings → General).
@@ -358,5 +379,5 @@ BigQuery, its connection variables must reach the steps that talk to it (ideally
 - Replace the placeholders (`table_1`, `field_1`, `...`) with real tables and columns.
 - Create the Cloud Build triggers (PR and `main`), the Composer variables and the Airflow
   Variable `dbt_notify_recipients`.
-- Drop the `_pr_<n>` schemas of the slim CI periodically.
+- Schedule `drop_pr_schemas` (weekly, or when a pull request is closed).
 - Test `dbt build` against every real warehouse that will be used (see *Known limitations*).

@@ -1,7 +1,6 @@
 """Unit tests of the DAG helpers (no Airflow needed): pytest dags/tests"""
 import json
 import sys
-from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -12,8 +11,9 @@ from dbt_airflow_helpers import (  # noqa: E402
     exposures_affected_by,
     failure_email,
     failures_by_team,
-    late_exposures,
+    not_ready_email,
     parse_dbt_show_json,
+    ready_by_groups,
     recipients,
 )
 
@@ -98,11 +98,18 @@ def test_failure_email_flags_high_criticality():
     assert subject.startswith("[HIGH] ") and "export" in body
 
 
-def test_late_exposures_compare_ready_by_with_the_run_finish_time():
-    exposures = specs_by_id()["poc_dbt__daily"]["exposures"]
-    finished = datetime(2026, 10, 20, 7, 45, tzinfo=timezone.utc)
-    assert [e["name"] for e in late_exposures(exposures, date(2026, 10, 20), finished)] == ["export"]
-    assert late_exposures(exposures, date(2026, 10, 20), datetime(2026, 10, 20, 7, 0, tzinfo=timezone.utc)) == []
+def test_ready_by_groups_one_deadline_check_per_distinct_time():
+    groups = ready_by_groups(specs_by_id()["poc_dbt__daily"]["exposures"])
+    assert [(ready_by, [e["name"] for e in members]) for ready_by, members in groups] == [
+        ("07:30", ["export"]), ("08:00", ["alert"])]
+
+
+def test_not_ready_email_reports_the_build_state():
+    export = specs_by_id()["poc_dbt__daily"]["exposures"][0]
+    subject, body = not_ready_email("team_export", [export], "poc_dbt__daily", "07:30", "running")
+    assert subject == "[HIGH] poc_dbt__daily: data not ready by 07:30 UTC for export"
+    assert "running" in body
+    assert "not started" in not_ready_email("team_export", [export], "poc_dbt__daily", "07:30", None)[1]
 
 
 def test_parse_dbt_show_json_reads_the_show_node_event():
