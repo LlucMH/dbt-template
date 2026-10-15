@@ -12,7 +12,8 @@
 #     the model fails if the SQL does not return exactly those columns and types.
 #     data_type comes from the per-warehouse type table (var data_types); the SQL
 #     casts every column with data_type(), from the same table, so they match on
-#     every warehouse.
+#     every warehouse. Exception: Python models, which dbt cannot enforce
+#     contracts on (they disable it in their config).
 #   - Every model exposes _dbt_run_at (dbt_run_at() macro in the SQL).
 #   - Materialization is explicit in each model's config(); schema, tags,
 #     labels, color and the use case meta (owner, criticality, schedule,
@@ -32,6 +33,11 @@ models:
         consumer: file_export
         export_format: csv
         criticality: high
+    data_tests:
+      # A gold product must never be published empty (dbt-checks).
+      - dbt_checks.row_count_greater_than:
+          arguments:
+            value: 0
     columns:
       - name: event_date
         data_type: "{{ var('data_types')[target.type].date }}"
@@ -39,7 +45,7 @@ models:
         data_tests:
           - not_null
           - unique
-          - not_in_future
+          - dbt_checks.not_future_date
       - name: amount_source_database_1
         data_type: "{{ var('data_types')[target.type].numeric }}"
         description: Total amount of the day in source_database_1. NULL if there were no records.
@@ -67,6 +73,11 @@ models:
     config:
       meta:
         consumer: bi
+    data_tests:
+      # A gold product must never be published empty (dbt-checks).
+      - dbt_checks.row_count_greater_than:
+          arguments:
+            value: 0
     columns:
       - name: month_start_date
         data_type: "{{ var('data_types')[target.type].date }}"
@@ -74,6 +85,10 @@ models:
         data_tests:
           - not_null
           - unique
+          # Custom generic test (tests/generic/no_date_gaps.sql): no missing month.
+          - no_date_gaps:
+              arguments:
+                datepart: month
       - name: amount_source_database_1
         data_type: "{{ var('data_types')[target.type].numeric }}"
         description: Total amount of the month in source_database_1.
@@ -100,3 +115,95 @@ models:
       - name: _dbt_run_at
         data_type: "{{ var('data_types')[target.type].timestamp }}"
         description: "{{ doc('col_dbt_run_at') }}"
+
+  # l2 · Python model: monthly forecast (linear trend). No contract: see config.
+  - name: tb_gld_l2_use_case_2__monthly_amount_forecast
+    description: >
+      Monthly amount of table_3: the actual months plus a 3-month forecast based on
+      a linear trend. Python model (pandas + numpy).
+    config:
+      # dbt does not support contracts on Python models: the contract inherited
+      # from gold is disabled here. Columns are still documented and tested.
+      contract:
+        enforced: false
+      # Required on every Python model (checked by validate_model_documentation):
+      # dbt build --select tag:python / --exclude tag:python.
+      tags: ["python"]
+      # Python model: disabled on warehouses that cannot run Python (Postgres, Redshift).
+      enabled: "{{ target.type not in ['postgres', 'redshift'] }}"
+      # How the warehouse runs Python: Dataproc Serverless (BigQuery), serverless
+      # cluster (Databricks). Snowflake (Snowpark) and DuckDB ignore it.
+      submission_method: "{{ 'serverless_cluster' if target.type == 'databricks' else 'serverless' }}"
+      meta:
+        consumer: bi
+        # Read in the model with dbt.config.get("meta")["adapter_type"].
+        adapter_type: "{{ target.type }}"
+    data_tests:
+      # A gold product must never be published empty (dbt-checks).
+      - dbt_checks.row_count_greater_than:
+          arguments:
+            value: 0
+    columns:
+      - name: month_start_date
+        description: First day of the month.
+        data_tests:
+          - not_null
+          - unique
+      - name: total_amount
+        description: Actual total amount of the month, or its forecast when is_forecast is TRUE (never below 0).
+        data_tests:
+          - not_null
+          - dbt_checks.non_negative
+      - name: is_forecast
+        description: TRUE for forecast months, FALSE for actual ones.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: _dbt_run_at
+        description: >
+          Time the model ran (UTC). Python models cannot read run_started_at, so it
+          may differ by a few seconds from the _dbt_run_at of the SQL models.
+
+  # l0 · view with the anomalies to alert about (sent by Airflow, not by dbt)
+  - name: vw_gld_l0_use_case_2__amount_anomaly_alerts
+    description: >
+      Amount anomalies of the latest loaded day, per source database. Usually
+      empty: the Airflow DAG sends an alert only when it returns rows.
+    config:
+      # Reads a Python model: disabled where Python models cannot run.
+      enabled: "{{ target.type not in ['postgres', 'redshift'] }}"
+      meta:
+        consumer: alert
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - event_date
+              - source_database
+    columns:
+      - name: event_date
+        data_type: "{{ var('data_types')[target.type].date }}"
+        description: Latest loaded day.
+        data_tests:
+          - not_null
+      - name: source_database
+        data_type: "{{ var('data_types')[target.type].string }}"
+        description: Source database with the anomalous amount.
+        data_tests:
+          - not_null
+      - name: total_amount
+        data_type: "{{ var('data_types')[target.type].float }}"
+        description: Amount of the day.
+      - name: baseline_mean
+        data_type: "{{ var('data_types')[target.type].float }}"
+        description: Mean daily amount of the previous 7 calendar days.
+      - name: z_score
+        data_type: "{{ var('data_types')[target.type].float }}"
+        description: Standard deviations between the day and its baseline.
+      - name: _dbt_run_at
+        data_type: "{{ var('data_types')[target.type].timestamp }}"
+        description: "{{ doc('col_dbt_run_at') }}"
+

@@ -2,4 +2,7 @@ packages:
   - name: dbt_utils
     package: dbt-labs/dbt_utils
     version: 1.4.1
-sha1_hash: a4da77dcded39caf20bd661f0098cbffd9735800
+  - git: https://github.com/LlucMH/dbt-checks.git
+    name: dbt_checks
+    revision: 5313922da2708ce66f1efc78c2cc0f60b1fde417
+sha1_hash: 7f45260dd4a67ec7506acf96e06e7b0689d25fb9

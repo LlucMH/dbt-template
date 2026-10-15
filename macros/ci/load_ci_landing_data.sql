@@ -9,8 +9,9 @@
         dbt build --target ci
 
     The data covers the cases the models handle: duplicated keys in table_3
-    (the latest load wins), a catalog value with no group in the seed, and a
-    record with an invalid relationship.
+    (the latest load wins), a catalog value with no group in the seed, a record
+    with an invalid relationship, and a stable daily series in table_3 (X5) that
+    ends in a spike, which the anomaly detection model must flag.
 
     Runs only on the `ci` target: it never creates tables in a real warehouse.
     It uses standard SQL and dbt macros, so it works on any adapter.
@@ -38,7 +39,15 @@
             UNION ALL SELECT 'X1', '2026-01-01', '12.00', " ~ ts_late ~ "
             UNION ALL SELECT 'X2', '2026-01-01', '5', " ~ ts ~ "
             UNION ALL SELECT 'X1', '2026-01-02', '7.25', " ~ ts ~ "
-            UNION ALL SELECT 'X3', '2026-02-01', '1', " ~ ts
+            UNION ALL SELECT 'X3', '2026-02-01', '1', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-03', '10', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-04', '11', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-05', '9', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-06', '10', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-07', '12', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-08', '10', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-09', '11', " ~ ts ~ "
+            UNION ALL SELECT 'X5', '2026-01-10', '100', " ~ ts
     } -%}
 
     {%- for source_name in ['source_database_1', 'source_database_2'] -%}

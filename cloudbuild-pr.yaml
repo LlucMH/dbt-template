@@ -1,0 +1,79 @@
+# =============================================================================
+# Pull request checks for poc_dbt. Trigger: pull request to main. Deploys nothing.
+#
+#   1. test        scripts/ci_test.sh: lint, pytest, naming and documentation rules,
+#                  and a full dbt build on DuckDB with test data (unit tests, models,
+#                  data tests, snapshots), plus a second incremental pass.
+#   2. state       downloads the manifest of the last deployment (published by
+#                  cloudbuild.yaml) to compare against.
+#   3. slim_ci     optional (_SLIM_CI=true): builds ONLY what the PR changed and its
+#                  children (state:modified+) on the real warehouse, in schemas
+#                  suffixed with the PR number (ds_..._pr_<n>), reading every
+#                  unchanged parent from production (--defer). Catches what DuckDB
+#                  cannot: real types, permissions, warehouse-specific behaviour.
+#                  Skipped when there is no deployed manifest yet.
+#
+# PR schemas are not dropped automatically: clean them up periodically.
+# Warehouses other than BigQuery need their connection variables in slim_ci,
+# ideally as secretEnv from Secret Manager. See .env.example.
+# =============================================================================
+substitutions:
+  _DBT_ADAPTER: bigquery
+  _SLIM_CI: "false"
+  _DBT_BQ_LOCATION: europe-southwest1
+  _DBT_GCS_BUCKET: europe-southwest1-aaaa-bucket
+  _DBT_STATE_PATH: dbt_state/poc_dbt
+  _PYTHON_IMAGE: python:3.12-slim
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: test
+    name: ${_PYTHON_IMAGE}
+    entrypoint: bash
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        python -m venv .venv-ci
+        . .venv-ci/bin/activate
+        pip install --quiet --no-cache-dir -r requirements-dev.txt
+        bash scripts/ci_test.sh
+
+  - id: state
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        mkdir -p state
+        gcloud storage cp gs://${_DBT_GCS_BUCKET}/${_DBT_STATE_PATH}/manifest.json state/manifest.json \
+          || echo "No deployed manifest yet: slim CI will be skipped."
+
+  - id: slim_ci
+    name: ${_PYTHON_IMAGE}
+    entrypoint: bash
+    env:
+      - DBT_PROFILES_DIR=.
+      - DBT_ADAPTER=${_DBT_ADAPTER}
+      - DBT_TARGET=local
+      - DBT_USER=pr_${_PR_NUMBER}
+      - DBT_TARGET_PATH=target_pr
+      - DBT_BQ_PROJECT=${PROJECT_ID}
+      - DBT_BQ_LOCATION=${_DBT_BQ_LOCATION}
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        if [ "${_SLIM_CI}" != "true" ] || [ ! -f state/manifest.json ]; then
+          echo "Slim CI skipped."
+          exit 0
+        fi
+        python -m venv .venv-pr
+        . .venv-pr/bin/activate
+        pip install --quiet --no-cache-dir -r requirements/${_DBT_ADAPTER}.txt
+        dbt deps
+        dbt build --select state:modified+ --defer --state state

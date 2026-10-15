@@ -5,3 +5,5 @@
 dbt-duckdb==1.11.0
 sqlfluff==3.4.2
 pre-commit==4.6.2
+# Unit tests of the Airflow DAG helpers (dags/tests).
+pytest==8.4.2

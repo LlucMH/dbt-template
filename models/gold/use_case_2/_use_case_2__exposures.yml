@@ -54,3 +54,25 @@ exposures:
         use_case: use_case_2
         consumer: bi
         schedule: monthly
+
+  # Alert e-mail sent by Airflow (dags/) when the anomalies view returns rows.
+  - name: use_case_2__amount_anomaly_alert
+    label: Amount anomaly alert (use_case_2)
+    type: application
+    maturity: medium
+    description: >
+      E-mail sent after the daily dbt build when the latest loaded day has an
+      anomalous amount. dbt prepares the content (the view); Airflow sends it.
+    owner:
+      name: team_use_case_2
+    depends_on:
+      - ref('vw_gld_l0_use_case_2__amount_anomaly_alerts')
+    config:
+      # Depends on a Python model: disabled where Python models cannot run.
+      enabled: "{{ target.type not in ['postgres', 'redshift'] }}"
+      tags: ["use_case_2", "daily"]
+      meta:
+        use_case: use_case_2
+        consumer: alert
+        schedule: daily
+

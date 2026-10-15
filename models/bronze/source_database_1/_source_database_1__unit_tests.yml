@@ -1,0 +1,33 @@
+# =============================================================================
+# Unit tests of source_database_1
+#
+# Template conventions:
+#   - Unit tests check LOGIC with fixed inputs and expected outputs (dbt >= 1.8);
+#     data tests check the DATA. Write one for every business rule a data test
+#     would not catch.
+#   - One unit tests file per domain, next to its models YAML.
+#   - Only the columns listed in expect are compared: list the ones the rule is
+#     about, never _dbt_run_at.
+#   - Inputs avoid warehouse-specific behaviour (e.g. malformed values for
+#     dbt.safe_cast), so the same test passes on every warehouse.
+#   - Run with dbt build (before the model) or dbt test --select test_type:unit.
+#     Python models cannot be unit tested.
+# =============================================================================
+version: 2
+
+unit_tests:
+  - name: brz_table_3_keeps_latest_load
+    description: >
+      When landing contains several loads of the same key (field_x, field_y), only
+      the most recent one (_ingestion_timestamp) reaches bronze, already cast.
+    model: vw_brz_l0_source_database_1__table_3
+    given:
+      - input: source('source_database_1', 'table_3')
+        rows:
+          - {src_col_x: "K1", src_col_y: "2026-01-01", src_col_z: "10.50", _ingestion_timestamp: "2026-01-01 08:00:00"}
+          - {src_col_x: "K1", src_col_y: "2026-01-01", src_col_z: "12.00", _ingestion_timestamp: "2026-01-02 08:00:00"}
+          - {src_col_x: "K1", src_col_y: "2026-01-02", src_col_z: "5", _ingestion_timestamp: "2026-01-02 08:00:00"}
+    expect:
+      rows:
+        - {field_x: "K1", field_y: "2026-01-01", field_z: 12.00}
+        - {field_x: "K1", field_y: "2026-01-02", field_z: 5}

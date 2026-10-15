@@ -1,0 +1,21 @@
+# Code owners: GitHub requests their review on every pull request that touches
+# their paths. The last matching line wins. Replace the placeholders with the real
+# GitHub users or teams (@org/team); keep them in sync with models/_groups.yml.
+
+# Default: the data platform team owns everything not listed below.
+*                                         @LlucMH
+
+# Platform: configuration, CI/CD, orchestration and shared macros.
+/dbt_project.yml                          @LlucMH
+/profiles.yml                             @LlucMH
+/packages.yml                             @LlucMH
+/macros/                                  @LlucMH
+/dags/                                    @LlucMH
+/scripts/                                 @LlucMH
+/cloudbuild*.yaml                         @LlucMH
+/requirements*                            @LlucMH
+
+# Domains: one line per source database, business entity and use case.
+# /models/bronze/source_database_1/       @org/team_source_database_1
+# /models/silver/business_entity_1/       @org/team_business_entity_1
+# /models/gold/use_case_1/                @org/team_use_case_1

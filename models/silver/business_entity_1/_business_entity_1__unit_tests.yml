@@ -1,0 +1,35 @@
+# =============================================================================
+# Unit tests of business_entity_1
+#
+# Template conventions:
+#   - Unit tests check LOGIC with fixed inputs and expected outputs (dbt >= 1.8);
+#     data tests check the DATA. Write one for every business rule a data test
+#     would not catch.
+#   - One unit tests file per domain, next to its models YAML.
+#   - Only the columns listed in expect are compared: list the ones the rule is
+#     about, never _dbt_run_at.
+#   - Inputs avoid warehouse-specific behaviour (e.g. malformed values for
+#     dbt.safe_cast), so the same test passes on every warehouse.
+#   - Run with dbt build (before the model) or dbt test --select test_type:unit.
+#     Python models cannot be unit tested.
+# =============================================================================
+version: 2
+
+unit_tests:
+  - name: slv_unmapped_table_2_values_go_to_no_group
+    description: >
+      Catalog values missing from the group mapping seed are reported as
+      'NO GROUP' (id NO_GROUP), sorted last (999) and flagged as not mapped.
+    model: vw_slv_l1_business_entity_1__dim_table_2_with_group
+    given:
+      - input: ref('vw_slv_l0_business_entity_1__dim_table_2')
+        rows:
+          - {table_2_id: "A01", table_2_desc: "Mapped value"}
+          - {table_2_id: "Z99", table_2_desc: "Unmapped value"}
+      - input: ref('vw_slv_l0_business_entity_1__dim_table_2_group')
+        rows:
+          - {table_2_id: "A01", group_id: "G1", group_desc: "Group 1", group_sort_order: 1}
+    expect:
+      rows:
+        - {table_2_id: "A01", group_id: "G1", group_desc: "Group 1", group_sort_order: 1, is_group_mapped: true}
+        - {table_2_id: "Z99", group_id: "NO_GROUP", group_desc: "NO GROUP", group_sort_order: 999, is_group_mapped: false}

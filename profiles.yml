@@ -34,6 +34,9 @@ poc_dbt_bigquery:
       priority: interactive
       job_execution_timeout_seconds: 900
       job_retries: 1
+      # Python models run on Dataproc Serverless: bucket for their code and region.
+      gcs_bucket: "{{ env_var('DBT_BQ_GCS_BUCKET', '') }}"
+      dataproc_region: "{{ env_var('DBT_BQ_DATAPROC_REGION', env_var('DBT_BQ_LOCATION', 'europe-southwest1')) }}"
       # Development safety net: a query scanning more than this fails.
       maximum_bytes_billed: "{{ env_var('DBT_BQ_MAXIMUM_BYTES_BILLED', '100000000000') | as_number }}"
     ideacion:

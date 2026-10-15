@@ -109,6 +109,7 @@ seeds:
 
     business_entity_1:
       +tags: business_entity_1
+      +group: business_entity_1
 
 # -----------------------------------------------------------------------------
 # Models
@@ -125,6 +126,12 @@ models:
     # Cost attribution: labels in BigQuery, query_tag in Snowflake.
     # Each warehouse ignores the ones that are not its own.
     +query_tag: poc_dbt
+    # Grants: SELECT on the objects dbt creates, per layer / use case.
+    # Grantees come from environment variables because their format depends on the
+    # warehouse (BigQuery: group:bi@company.com, serviceAccount:...; Snowflake,
+    # Postgres, Redshift: role names; Databricks: group names), comma-separated.
+    # An empty variable means NO grants config (not an empty list): an empty list
+    # would make dbt revoke the SELECT grants managed elsewhere.
 
     # ---------------------------------------------------------------- BRONZE
     bronze:
@@ -139,10 +146,12 @@ models:
 
       source_database_1:
         +tags: source_database_1
+        +group: source_database_1
         +schema: ds_brz_source_database_1
 
       source_database_2:
         +tags: source_database_2
+        +group: source_database_2
         +schema: ds_brz_source_database_2
 
     # ---------------------------------------------------------------- SILVER
@@ -155,13 +164,17 @@ models:
       +labels:
         dbt_project: poc_dbt
         layer: silver
+      # Silver: readable by the analysts / data science team.
+      +grants: "{{ {'select': env_var('DBT_GRANTEES_SILVER', '').split(',') | map('trim') | list} if env_var('DBT_GRANTEES_SILVER', '') else {} }}"
 
       business_entity_1:
         +tags: business_entity_1
+        +group: business_entity_1
         +schema: ds_slv_business_entity_1
 
       business_entity_2:
         +tags: business_entity_2
+        +group: business_entity_2
         +schema: ds_slv_business_entity_2
 
     # ------------------------------------------------------------------ GOLD
@@ -184,7 +197,10 @@ models:
       # owner/notify: team identifiers, never real email addresses here.
       use_case_1:
         +tags: use_case_1
+        +group: use_case_1
         +schema: ds_gld_use_case_1
+        # Gold: readable by the consumers of this use case (BI, export service...).
+        +grants: "{{ {'select': env_var('DBT_GRANTEES_USE_CASE_1', '').split(',') | map('trim') | list} if env_var('DBT_GRANTEES_USE_CASE_1', '') else {} }}"
         +labels:
           use_case: use_case_1
         +meta:
@@ -196,7 +212,10 @@ models:
 
       use_case_2:
         +tags: use_case_2
+        +group: use_case_2
         +schema: ds_gld_use_case_2
+        # Gold: readable by the consumers of this use case (BI, export service...).
+        +grants: "{{ {'select': env_var('DBT_GRANTEES_USE_CASE_2', '').split(',') | map('trim') | list} if env_var('DBT_GRANTEES_USE_CASE_2', '') else {} }}"
         +labels:
           use_case: use_case_2
         +meta:
@@ -222,9 +241,11 @@ snapshots:
 
     source_database_1:
       +tags: source_database_1
+      +group: source_database_1
 
     source_database_2:
       +tags: source_database_2
+      +group: source_database_2
 
 # -----------------------------------------------------------------------------
 # Data tests

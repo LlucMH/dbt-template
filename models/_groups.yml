@@ -1,0 +1,31 @@
+# =============================================================================
+# Groups: ownership of the project, one group per domain.
+#
+# Every model, seed and snapshot belongs to the group of its domain (set per
+# folder in dbt_project.yml with +group). Groups make ownership explicit in the
+# docs and the manifest (Airflow and CODEOWNERS use the same team identifiers),
+# and enable access: private for models only their own domain may ref().
+#
+# owner: team identifier, never real email addresses.
+# =============================================================================
+version: 2
+
+groups:
+  - name: source_database_1
+    owner:
+      name: team_source_database_1
+  - name: source_database_2
+    owner:
+      name: team_source_database_2
+  - name: business_entity_1
+    owner:
+      name: team_business_entity_1
+  - name: business_entity_2
+    owner:
+      name: team_business_entity_2
+  - name: use_case_1
+    owner:
+      name: team_use_case_1
+  - name: use_case_2
+    owner:
+      name: team_use_case_2

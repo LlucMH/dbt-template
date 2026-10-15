@@ -1,0 +1,42 @@
+# =============================================================================
+# Unit tests of business_entity_2
+#
+# Template conventions:
+#   - Unit tests check LOGIC with fixed inputs and expected outputs (dbt >= 1.8);
+#     data tests check the DATA. Write one for every business rule a data test
+#     would not catch.
+#   - One unit tests file per domain, next to its models YAML.
+#   - Only the columns listed in expect are compared: list the ones the rule is
+#     about, never _dbt_run_at.
+#   - Inputs avoid warehouse-specific behaviour (e.g. malformed values for
+#     dbt.safe_cast), so the same test passes on every warehouse.
+#   - Run with dbt build (before the model) or dbt test --select test_type:unit.
+#     Python models cannot be unit tested.
+# =============================================================================
+version: 2
+
+unit_tests:
+  - name: slv_incremental_only_reloads_the_reprocess_window
+    description: >
+      On an incremental run, only the last business_entity_2_reprocess_days days
+      before the latest loaded date are read again: a late record inside the window
+      is loaded, an older one is not.
+    model: tb_slv_l1_business_entity_2__fact_table_3_partitioned
+    overrides:
+      macros:
+        is_incremental: true
+      vars:
+        business_entity_2_reprocess_days: 3
+    given:
+      - input: this
+        rows:
+          - {source_database: "source_database_1", table_3_id: "OLD", event_date: "2026-02-10", amount: 1}
+      - input: ref('vw_slv_l0_business_entity_2__fact_table_3')
+        rows:
+          - {source_database: "source_database_1", table_3_id: "IN_WINDOW", event_date: "2026-02-08", amount: 5}
+          - {source_database: "source_database_1", table_3_id: "LATEST", event_date: "2026-02-10", amount: 7}
+          - {source_database: "source_database_1", table_3_id: "TOO_LATE", event_date: "2026-02-01", amount: 9}
+    expect:
+      rows:
+        - {source_database: "source_database_1", table_3_id: "IN_WINDOW", event_date: "2026-02-08", amount: 5}
+        - {source_database: "source_database_1", table_3_id: "LATEST", event_date: "2026-02-10", amount: 7}

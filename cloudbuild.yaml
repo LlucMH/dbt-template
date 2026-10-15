@@ -1,22 +1,25 @@
 # =============================================================================
-# CI/CD for poc_dbt: tests the project, builds the manifest and deploys it to
-# the Composer bucket.
+# Deployment of poc_dbt. Trigger: push to main (after the PR checks of
+# cloudbuild-pr.yaml have passed).
 #
-#   1. test      lint + FULL dbt build on DuckDB with test data
-#                (macros/ci/load_ci_landing_data.sql), at no cost and with no
-#                credentials. Runs twice: the second pass tests the incremental
-#                model and the snapshots. Since the SQL is warehouse-agnostic,
-#                it validates the logic for every warehouse.
-#   2. manifest  installs the adapter of the deployment warehouse (_DBT_ADAPTER)
-#                and builds target/manifest.json with the deployment target,
-#                which is what Airflow reads.
-#   3. deploy    syncs the project (with dbt_packages/ and target/manifest.json)
-#                to the bucket. Deletes from the bucket whatever no longer exists
-#                in the project, so that Composer never runs deleted files.
+#   1. test           scripts/ci_test.sh: the same suite as the pull requests
+#                     (lint, pytest, rules, full dbt build on DuckDB).
+#   2. manifest       installs the adapter of the deployment warehouse (_DBT_ADAPTER)
+#                     and builds target/manifest.json with the deployment target,
+#                     which is what Airflow reads.
+#   3. docs           optional (_DBT_DOCS_BUCKET not empty): dbt docs generate --static
+#                     against the warehouse (it reads the catalog, so it needs read
+#                     access) into a single index.html.
+#   4. deploy         syncs the project (with dbt_packages/, target/manifest.json and
+#                     dags/) to the Composer bucket. Deletes from the bucket whatever
+#                     no longer exists in the project, so that Composer never runs
+#                     deleted files.
+#   5. publish        stores the deployed manifest for the slim CI of the next pull
+#                     requests, and the docs page in _DBT_DOCS_BUCKET.
 #
 # Variables: substitutions below, overridable in the Cloud Build trigger.
 # Warehouses other than BigQuery also need their connection variables
-# (DBT_SNOWFLAKE_*, DBT_DATABRICKS_*...) in the manifest step, ideally as
+# (DBT_SNOWFLAKE_*, DBT_DATABRICKS_*...) in the manifest and docs steps, ideally as
 # secretEnv from Secret Manager. See .env.example.
 # =============================================================================
 substitutions:
@@ -25,6 +28,8 @@ substitutions:
   _DBT_BQ_LOCATION: europe-southwest1
   _DBT_GCS_BUCKET: europe-southwest1-aaaa-bucket
   _DBT_GCS_PATH: dags/dbt
+  _DBT_STATE_PATH: dbt_state/poc_dbt
+  _DBT_DOCS_BUCKET: ""
   _PYTHON_IMAGE: python:3.12-slim
 
 options:
@@ -34,12 +39,6 @@ steps:
   - id: test
     name: ${_PYTHON_IMAGE}
     entrypoint: bash
-    env:
-      - DBT_PROFILES_DIR=.
-      - DBT_ADAPTER=duckdb
-      - DBT_TARGET=ci
-      - DBT_TARGET_PATH=target_ci
-      - DBT_USER=ci
     args:
       - -euo
       - pipefail
@@ -48,13 +47,7 @@ steps:
         python -m venv .venv-ci
         . .venv-ci/bin/activate
         pip install --quiet --no-cache-dir -r requirements-dev.txt
-        sqlfluff lint models analyses tests
-        mkdir -p target_ci
-        dbt deps
-        dbt run-operation validate_model_naming
-        dbt run-operation load_ci_landing_data
-        dbt build
-        dbt build --select config.materialized:incremental resource_type:snapshot
+        bash scripts/ci_test.sh
 
   - id: manifest
     name: ${_PYTHON_IMAGE}
@@ -73,7 +66,11 @@ steps:
         python -m venv .venv-deploy
         . .venv-deploy/bin/activate
         pip install --quiet --no-cache-dir -r requirements/${_DBT_ADAPTER}.txt
+        dbt deps
         dbt parse
+        if [ -n "${_DBT_DOCS_BUCKET}" ]; then
+          dbt docs generate --static
+        fi
 
   - id: deploy
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
@@ -83,8 +80,21 @@ steps:
       - rsync
       - --recursive
       - --delete-unmatched-destination-objects
-      # Only what dbt needs at run time is deployed. "$$" is a literal "$":
+      # Only what dbt and Airflow need at run time is deployed. "$$" is a literal "$":
       # Cloud Build treats a lone "$" as a substitution.
-      - --exclude=^\.git/|^\.claude/|^\.venv|^logs/|^target_ci/|^requirements|^sqlfluff_libs/|^\.sqlfluff|^\.env|^\.pre-commit-config\.yaml$$|^cloudbuild\.yaml$$|\.duckdb(\.wal)?$$
+      - --exclude=^\.git|^\.github/|^\.claude/|^\.venv|^logs/|^target_ci/|^state/|^requirements|^scripts/|^sqlfluff_libs/|^dags/tests/|^\.sqlfluff|^\.env|^\.pre-commit-config\.yaml$$|^cloudbuild.*\.yaml$$|^CONTRIBUTING\.md$$|\.duckdb(\.wal)?$$
       - .
       - gs://${_DBT_GCS_BUCKET}/${_DBT_GCS_PATH}
+
+  - id: publish
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        gcloud storage cp target/manifest.json gs://${_DBT_GCS_BUCKET}/${_DBT_STATE_PATH}/manifest.json
+        if [ -n "${_DBT_DOCS_BUCKET}" ]; then
+          gcloud storage cp target/static_index.html gs://${_DBT_DOCS_BUCKET}/index.html
+        fi

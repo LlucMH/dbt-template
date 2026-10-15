@@ -1,0 +1,15 @@
+# Airflow scans the whole deployed project (dags/dbt/ in the Composer bucket).
+# Only dags/ holds DAGs: ignore everything else, especially the Python models,
+# which Airflow would otherwise try to import. Regular expressions, one per line.
+models/
+macros/
+tests/
+seeds/
+snapshots/
+analyses/
+scripts/
+sqlfluff_libs/
+dbt_packages/
+target/
+logs/
+dags/tests/

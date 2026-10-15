@@ -45,6 +45,12 @@ models:
           - not_null
       - name: amount
         description: ... NULL if the source value was not numeric.
+        data_tests:
+          # Isolated non-numeric values are tolerated; more than 5% means a broken
+          # source format (dbt-checks).
+          - dbt_checks.null_ratio_below:
+              arguments:
+                threshold: 0.05
       - name: _dbt_run_at
         description: "{{ doc('col_dbt_run_at') }}"
 
@@ -86,8 +92,8 @@ models:
         data_tests:
           # No where on purpose: a date filter would never see rows with a NULL date.
           - not_null
-          # Custom generic test (tests/generic/not_in_future.sql).
-          - not_in_future
+          # A date in the future means a parsing error in the source (dbt-checks).
+          - dbt_checks.not_future_date
       - name: amount
         description: ... NULL if the source value was not numeric.
       - name: _dbt_run_at
@@ -119,3 +125,60 @@ models:
         description: Sum of amount on the day and source database.
       - name: _dbt_run_at
         description: "{{ doc('col_dbt_run_at') }}"
+
+  # l3 · Python model: daily anomalies (rolling z-score)
+  - name: tb_slv_l3_business_entity_2__agg_table_3_daily_anomalies
+    description: >
+      Daily amount of table_3 per source database with an anomaly flag: the amount
+      is more than 3 standard deviations away from the mean of the previous 7
+      calendar days of the same source database. Python model (pandas).
+    config:
+      # Required on every Python model (checked by validate_model_documentation):
+      # dbt build --select tag:python / --exclude tag:python.
+      tags: ["python"]
+      # Python model: disabled on warehouses that cannot run Python (Postgres, Redshift).
+      enabled: "{{ target.type not in ['postgres', 'redshift'] }}"
+      # How the warehouse runs Python: Dataproc Serverless (BigQuery), serverless
+      # cluster (Databricks). Snowflake (Snowpark) and DuckDB ignore it.
+      submission_method: "{{ 'serverless_cluster' if target.type == 'databricks' else 'serverless' }}"
+      meta:
+        # Read in the model with dbt.config.get("meta")["adapter_type"].
+        adapter_type: "{{ target.type }}"
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - event_date
+              - source_database
+    columns:
+      - name: event_date
+        description: Day of the amount.
+        data_tests:
+          - not_null
+          - dbt_checks.not_future_date
+      - name: source_database
+        description: Source database the records come from.
+        data_tests:
+          - not_null
+      - name: record_count
+        description: Number of table_3 records on the day and source database.
+      - name: total_amount
+        description: Sum of amount on the day and source database.
+      - name: baseline_mean
+        description: Mean daily amount of the previous 7 calendar days; NULL without enough history (3 days).
+      - name: baseline_std
+        description: Standard deviation of the previous 7 calendar days; NULL without enough history.
+      - name: z_score
+        description: Standard deviations between the day and its baseline; NULL without baseline or with a flat one.
+      - name: is_anomaly
+        description: TRUE if the absolute z_score is above 3. Days without a baseline are never anomalies.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: _dbt_run_at
+        description: >
+          Time the model ran (UTC). Python models cannot read run_started_at, so it
+          may differ by a few seconds from the _dbt_run_at of the SQL models.
